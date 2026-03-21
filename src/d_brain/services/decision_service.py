@@ -8,12 +8,16 @@ from pathlib import Path
 from typing import Any
 
 from d_brain.services.decision_models import DecisionRunStatus
-from d_brain.services.decision_store import DecisionStore
+from d_brain.services.decision_store import DecisionStore, DecisionStoreError
 from d_brain.services.pattern_detector import detect_patterns
 from d_brain.services.processor import ClaudeProcessor
 
 DEFAULT_DECISION_HORIZON_DAYS = 14
 logger = logging.getLogger(__name__)
+
+
+class DecisionServiceError(RuntimeError):
+    """Raised when a decision trace operation is invalid."""
 
 
 def _normalize_lines(value: Any) -> list[str]:
@@ -40,6 +44,7 @@ def format_decision_html(decision: dict[str, Any]) -> str:
         str(decision.get("counter_argument", "")).strip()
     )
     horizon_days = int(decision.get("check_in_days") or DEFAULT_DECISION_HORIZON_DAYS)
+    trace_run_id = decision.get("trace_run_id")
 
     parts = [f"🎯 <b>Решение на {horizon_days} дней</b>", "", f"<b>Вердикт:</b> {verdict}"]
 
@@ -66,6 +71,9 @@ def format_decision_html(decision: dict[str, Any]) -> str:
         parts.extend(["", "<b>Что у тебя повторяется:</b>"])
         parts.extend(f"• {html.escape(item)}" for item in patterns)
 
+    if trace_run_id:
+        parts.extend(["", f"<b>Trace:</b> <code>/decide_trace {int(trace_run_id)}</code>"])
+
     return "\n".join(parts)
 
 
@@ -87,6 +95,96 @@ class DecisionService:
         self.store = store
         self.store_path = store_path
 
+    def _open_store(self) -> tuple[Any, bool]:
+        if self.store is not None:
+            return self.store, False
+        if self.store_path is None:
+            raise DecisionServiceError("Decision store is not configured")
+        return DecisionStore(self.store_path), True
+
+    @staticmethod
+    def _ensure_owner(run: Any, user_id: int) -> None:
+        if str(run.workspace_id) != str(user_id):
+            raise DecisionServiceError("Decision trace does not belong to this user")
+
+    def render_decision_trace(self, user_id: int, run_id: int) -> str:
+        """Render a decision trace from existing run/record/review state."""
+        store, created_store = self._open_store()
+        try:
+            run = store.get_run(run_id)
+            self._ensure_owner(run, user_id)
+
+            record = next(
+                (item for item in store.list_records(str(user_id)) if item.decision_run_id == run.id),
+                None,
+            )
+            review = None
+            if record is not None:
+                review = next(
+                    (
+                        item
+                        for item in store.list_reviews(str(user_id))
+                        if item.decision_record_id == record.id
+                    ),
+                    None,
+                )
+
+            parts = [
+                "🔎 <b>Decision Trace</b>",
+                "",
+                f"<b>ID:</b> <code>{run.id}</code>",
+                f"<b>Тип:</b> {html.escape(run.decision_type)}",
+                f"<b>Статус:</b> {html.escape(run.status.value)}",
+                f"<b>Горизонт:</b> {run.time_horizon_days} дней",
+                "",
+                f"<b>Запрос:</b> {html.escape(run.request_text)}",
+            ]
+
+            if run.final_verdict:
+                parts.append(f"<b>Вердикт:</b> {html.escape(run.final_verdict)}")
+
+            if record is None:
+                parts.extend(["", "<i>Decision record пока не зафиксирован.</i>"])
+                return "\n".join(parts)
+
+            parts.extend(
+                [
+                    "",
+                    f"<b>Заголовок:</b> {html.escape(record.title)}",
+                    f"<b>Summary:</b> {html.escape(record.decision_summary)}",
+                    f"<b>Почему:</b> {html.escape(record.why)}",
+                    f"<b>Риски:</b> {html.escape(record.risks)}",
+                ]
+            )
+
+            if record.rejected_options:
+                parts.append(
+                    f"<b>Не делай:</b> {html.escape('; '.join(record.rejected_options))}"
+                )
+            if record.expected_signals:
+                parts.append(
+                    f"<b>Что проверить:</b> {html.escape('; '.join(record.expected_signals))}"
+                )
+            if record.linked_pattern_names:
+                parts.append(
+                    f"<b>Паттерны:</b> {html.escape(', '.join(record.linked_pattern_names))}"
+                )
+            if review is not None:
+                parts.append(
+                    f"<b>Связанный review:</b> <code>{review.id}</code> "
+                    f"({html.escape(review.status.value)}) — "
+                    f"<code>/review_trace {review.id}</code>"
+                )
+                parts.append(
+                    f"<b>Закрыть цикл:</b> <code>/review_done {review.id} что получилось</code>"
+                )
+            return "\n".join(parts)
+        except DecisionStoreError as exc:
+            raise DecisionServiceError(str(exc)) from exc
+        finally:
+            if created_store and isinstance(store, DecisionStore):
+                store.close()
+
     def decide(self, prompt: str, user_id: int = 0) -> dict[str, Any]:
         """Run a decision-specific reasoning flow and persist the result if possible."""
         result = self.processor.execute_decision(prompt, user_id, self.horizon_days)
@@ -103,6 +201,9 @@ class DecisionService:
             store = DecisionStore(self.store_path)
             created_store = True
 
+        run = None
+        record = None
+        review = None
         try:
             recent_records = store.list_records(str(user_id), limit=5) if store is not None else []
             existing_patterns = store.list_patterns(str(user_id), limit=10) if store is not None else []
@@ -118,8 +219,6 @@ class DecisionService:
                 why_lines = _normalize_lines(decision.get("why"))
                 risk_lines = _normalize_lines(decision.get("risks"))
                 check_signals = _normalize_lines(decision.get("check_in_signals"))
-                run = None
-                record = None
                 try:
                     if callable(transaction):
                         with transaction():
@@ -150,7 +249,7 @@ class DecisionService:
                                 )
                             if callable(create_review) and record is not None:
                                 expected_outcome = "; ".join(check_signals) or str(decision.get("summary", ""))
-                                create_review(
+                                review = create_review(
                                     workspace_id=str(user_id),
                                     decision_record_id=record.id,
                                     due_at=record.review_date,
@@ -184,7 +283,7 @@ class DecisionService:
                             )
                         if callable(create_review) and record is not None:
                             expected_outcome = "; ".join(check_signals) or str(decision.get("summary", ""))
-                            create_review(
+                            review = create_review(
                                 workspace_id=str(user_id),
                                 decision_record_id=record.id,
                                 due_at=record.review_date,
@@ -211,6 +310,10 @@ class DecisionService:
             if created_store and isinstance(store, DecisionStore):
                 store.close()
 
+        if run is not None:
+            decision["trace_run_id"] = run.id
+        if review is not None:
+            decision["review_id"] = review.id
         if detected_patterns:
             decision["patterns"] = [pattern.description for pattern in detected_patterns[:2]]
 

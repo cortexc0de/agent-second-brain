@@ -75,6 +75,9 @@ def _install_project_stubs() -> None:
         _ORIGINAL_MODULES.setdefault("d_brain.services.decision_service", _MISSING)
         decision_service_module = types.ModuleType("d_brain.services.decision_service")
 
+        class DecisionServiceError(RuntimeError):
+            pass
+
         class DecisionService:
             def __init__(self, *args, **kwargs) -> None:
                 pass
@@ -82,7 +85,11 @@ def _install_project_stubs() -> None:
             def decide(self, prompt: str, user_id: int = 0) -> dict:
                 return {"report": f"{prompt}:{user_id}"}
 
+            def render_decision_trace(self, user_id: int, run_id: int) -> str:
+                return f"decision-trace:{user_id}:{run_id}"
+
         decision_service_module.DecisionService = DecisionService
+        decision_service_module.DecisionServiceError = DecisionServiceError
         sys.modules["d_brain.services.decision_service"] = decision_service_module
 
     if "d_brain.services.review_service" not in sys.modules:
@@ -212,6 +219,64 @@ class DecideHandlerTests(unittest.IsolatedAsyncioTestCase):
             await decide.cmd_decide(message, command)
 
         status_message.edit_text.assert_awaited_once_with("ERR:boom")
+
+    async def test_cmd_decide_trace_requires_run_id(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args=None)
+
+        await decide.cmd_decide_trace(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("/decide_trace ID", reply_text)
+
+    async def test_cmd_decide_trace_rejects_missing_user(self) -> None:
+        message = SimpleNamespace(
+            from_user=None,
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7")
+
+        await decide.cmd_decide_trace(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("Не удалось определить пользователя", reply_text)
+
+    async def test_cmd_decide_trace_renders_trace(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7")
+        service = MagicMock()
+        service.render_decision_trace.return_value = "trace"
+
+        with patch.object(decide, "_build_decision_service", return_value=service):
+            await decide.cmd_decide_trace(message, command)
+
+        service.render_decision_trace.assert_called_once_with(42, 7)
+        message.answer.assert_awaited_once_with("trace")
+
+    async def test_cmd_decide_trace_handles_service_error(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7")
+        service = MagicMock()
+        service.render_decision_trace.side_effect = RuntimeError("boom")
+
+        with patch.object(decide, "_build_decision_service", return_value=service):
+            await decide.cmd_decide_trace(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("Ошибка", reply_text)
+        self.assertIn("boom", reply_text)
 
 
 class ReviewHandlerTests(unittest.IsolatedAsyncioTestCase):

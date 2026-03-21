@@ -67,6 +67,7 @@ class DecisionServiceTests(unittest.TestCase):
                 "check_in_days": 14,
                 "check_in_signals": ["2 созвона", "1 оплата"],
                 "counter_argument": "если сигнал не повторится",
+                "trace_run_id": 7,
             }
         )
 
@@ -76,6 +77,7 @@ class DecisionServiceTests(unittest.TestCase):
         self.assertIn("<b>Риски:</b>", rendered)
         self.assertIn("<b>Что проверить через 14 дней:</b>", rendered)
         self.assertIn("<b>Что может это опровергнуть:</b>", rendered)
+        self.assertIn("/decide_trace 7", rendered)
 
     def test_decide_persists_run_record_and_review(self) -> None:
         fake_processor = FakeProcessor(self._decision_payload())
@@ -96,6 +98,7 @@ class DecisionServiceTests(unittest.TestCase):
 
                 self.assertNotIn("error", result)
                 self.assertIn("Сфокусируйся на onboarding", result["report"])
+                self.assertIn("/decide_trace 1", result["report"])
                 self.assertEqual(fake_processor.calls[0][2], 14)
                 self.assertIn("<b>Что у тебя повторяется:</b>", result["report"])
 
@@ -223,6 +226,54 @@ class DecisionServiceTests(unittest.TestCase):
                     {pattern.name: pattern.id for pattern in second_patterns},
                     first_ids,
                 )
+
+    def test_render_decision_trace_shows_run_record_patterns_and_review(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                result = service.decide(
+                    "У меня три направления, не понимаю, что оставить",
+                    user_id=42,
+                )
+
+                run_id = result["decision"]["trace_run_id"]
+                rendered = service.render_decision_trace(42, run_id)
+
+                self.assertIn("Decision Trace", rendered)
+                self.assertIn(f"<code>{run_id}</code>", rendered)
+                self.assertIn("У меня три направления", rendered)
+                self.assertIn("Сфокусируйся на onboarding", rendered)
+                self.assertIn("focus_fragmentation", rendered)
+                self.assertIn("/review_trace", rendered)
+                self.assertIn("/review_done 1", rendered)
+
+    def test_render_decision_trace_rejects_foreign_run(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                result = service.decide(
+                    "У меня три направления, не понимаю, что оставить",
+                    user_id=42,
+                )
+
+                with self.assertRaises(RuntimeError):
+                    service.render_decision_trace(7, result["decision"]["trace_run_id"])
 
 
 if __name__ == "__main__":

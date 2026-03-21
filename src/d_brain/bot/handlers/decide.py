@@ -9,10 +9,20 @@ from aiogram.types import Message
 
 from d_brain.bot.formatters import format_process_report
 from d_brain.config import get_settings
-from d_brain.services.decision_service import DecisionService
+from d_brain.services.decision_service import DecisionService, DecisionServiceError
 
 router = Router(name="decide")
 logger = logging.getLogger(__name__)
+
+
+def _build_decision_service() -> DecisionService:
+    settings = get_settings()
+    store_path = settings.vault_path / ".decision-store.sqlite3"
+    return DecisionService(
+        settings.vault_path,
+        settings.todoist_api_key,
+        store_path=store_path,
+    )
 
 
 async def _require_user_id(message: Message) -> int | None:
@@ -38,13 +48,7 @@ async def cmd_decide(message: Message, command: CommandObject) -> None:
         return
 
     status_msg = await message.answer("⏳ Думаю над решением...")
-    settings = get_settings()
-    store_path = settings.vault_path / ".decision-store.sqlite3"
-    service = DecisionService(
-        settings.vault_path,
-        settings.todoist_api_key,
-        store_path=store_path,
-    )
+    service = _build_decision_service()
 
     async def run_with_progress() -> dict:
         task = asyncio.create_task(
@@ -76,3 +80,28 @@ async def cmd_decide(message: Message, command: CommandObject) -> None:
         await status_msg.edit_text(formatted)
     except Exception:
         await status_msg.edit_text(formatted, parse_mode=None)
+
+
+@router.message(Command("decide_trace"))
+async def cmd_decide_trace(message: Message, command: CommandObject) -> None:
+    """Show trace details for a persisted decision run."""
+    user_id = await _require_user_id(message)
+    if user_id is None:
+        return
+
+    if not command.args or not command.args.strip().isdigit():
+        await message.answer(
+            "🔎 <b>Формат:</b> <code>/decide_trace ID</code>\n\n"
+            "Пример:\n"
+            "<code>/decide_trace 7</code>"
+        )
+        return
+
+    service = _build_decision_service()
+    try:
+        result = service.render_decision_trace(user_id, int(command.args.strip()))
+    except (DecisionServiceError, RuntimeError) as exc:
+        await message.answer(f"❌ <b>Ошибка:</b> {exc}")
+        return
+
+    await message.answer(result)
