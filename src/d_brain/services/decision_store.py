@@ -17,6 +17,8 @@ from d_brain.services.decision_models import (
     DecisionRunStatus,
     PatternRecord,
     PatternStatus,
+    ReviewDeliveryEvent,
+    ReviewDeliveryEventType,
     ReviewRecord,
     ReviewStatus,
 )
@@ -122,6 +124,18 @@ class DecisionStore:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS review_delivery_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    review_id INTEGER NOT NULL REFERENCES review_records(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    worker_id TEXT,
+                    error_code TEXT,
+                    error_message TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_runs_workspace
                     ON decision_runs(workspace_id, id);
                 CREATE INDEX IF NOT EXISTS idx_records_workspace
@@ -132,6 +146,10 @@ class DecisionStore:
                     ON pattern_records(workspace_id, id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_patterns_workspace_name
                     ON pattern_records(workspace_id, name);
+                CREATE INDEX IF NOT EXISTS idx_review_delivery_events_review
+                    ON review_delivery_events(review_id, id);
+                CREATE INDEX IF NOT EXISTS idx_review_delivery_events_workspace
+                    ON review_delivery_events(workspace_id, created_at, id);
                 """
             )
         self._migrate_schema()
@@ -224,6 +242,17 @@ class DecisionStore:
         if not isinstance(data, list):
             raise DecisionStoreError("Expected JSON array in store")
         return [str(item) for item in data]
+
+    @staticmethod
+    def _dump_json_object(value: dict[str, object] | None) -> str:
+        return json.dumps(value or {}, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _load_json_object(value: str) -> dict[str, object]:
+        data = json.loads(value)
+        if not isinstance(data, dict):
+            raise DecisionStoreError("Expected JSON object in store")
+        return data
 
     @staticmethod
     def _status_value(status: DecisionRunStatus | ReviewStatus | str) -> str:
@@ -672,7 +701,37 @@ class DecisionStore:
                 )
                 if cursor.rowcount == 1:
                     claimed_ids.append(int(row["id"]))
-        return [self.get_review(review_id) for review_id in claimed_ids]
+            claimed_reviews = [self.get_review(review_id) for review_id in claimed_ids]
+            for review in claimed_reviews:
+                self._conn.execute(
+                    """
+                    INSERT INTO review_delivery_events (
+                        review_id,
+                        workspace_id,
+                        event_type,
+                        worker_id,
+                        error_code,
+                        error_message,
+                        metadata_json,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        review.id,
+                        review.workspace_id,
+                        ReviewDeliveryEventType.CLAIMED.value,
+                        claimer_id,
+                        None,
+                        None,
+                        self._dump_json_object(
+                            {
+                                "claim_expires_at": self._serialize_datetime(lease_until),
+                            }
+                        ),
+                        self._serialize_datetime(threshold),
+                    ),
+                )
+        return claimed_reviews
 
     def update_review(
         self,
@@ -764,6 +823,65 @@ class DecisionStore:
         if cursor.rowcount != 1:
             raise DecisionStoreError(f"Review record {review_id} is not claimed by {claimer_id}")
         return self.get_review(review_id)
+
+    def append_review_delivery_event(
+        self,
+        *,
+        review_id: int,
+        workspace_id: str,
+        event_type: ReviewDeliveryEventType,
+        worker_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        metadata: dict[str, object] | None = None,
+        created_at: datetime | None = None,
+    ) -> ReviewDeliveryEvent:
+        event_time = created_at or self._now()
+        with self._write():
+            cursor = self._conn.execute(
+                """
+                INSERT INTO review_delivery_events (
+                    review_id,
+                    workspace_id,
+                    event_type,
+                    worker_id,
+                    error_code,
+                    error_message,
+                    metadata_json,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    review_id,
+                    workspace_id,
+                    event_type.value,
+                    worker_id,
+                    error_code,
+                    error_message,
+                    self._dump_json_object(metadata),
+                    self._serialize_datetime(event_time),
+                ),
+            )
+        row = self._conn.execute(
+            "SELECT * FROM review_delivery_events WHERE id = ?",
+            (cursor.lastrowid,),
+        ).fetchone()
+        if row is None:
+            raise DecisionStoreError("Review delivery event insert failed")
+        return self._row_to_review_delivery_event(row)
+
+    def list_review_delivery_events(
+        self,
+        review_id: int,
+        limit: int | None = None,
+    ) -> list[ReviewDeliveryEvent]:
+        query = "SELECT * FROM review_delivery_events WHERE review_id = ? ORDER BY id"
+        params: list[object] = [review_id]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = self._conn.execute(query, params).fetchall()
+        return [self._row_to_review_delivery_event(row) for row in rows]
 
     def update_record_outcome(
         self,
@@ -1041,6 +1159,20 @@ class DecisionStore:
                 if row["claim_expires_at"] is not None
                 else None
             ),
+        )
+
+    @staticmethod
+    def _row_to_review_delivery_event(row: sqlite3.Row) -> ReviewDeliveryEvent:
+        return ReviewDeliveryEvent(
+            id=row["id"],
+            review_id=row["review_id"],
+            workspace_id=row["workspace_id"],
+            event_type=ReviewDeliveryEventType(row["event_type"]),
+            worker_id=row["worker_id"],
+            error_code=row["error_code"],
+            error_message=row["error_message"],
+            metadata=DecisionStore._load_json_object(row["metadata_json"]),
+            created_at=DecisionStore._parse_datetime(row["created_at"]),
         )
 
     @staticmethod

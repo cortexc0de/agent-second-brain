@@ -9,6 +9,7 @@ from d_brain.services.decision_models import (
     DecisionOutcomeStatus,
     DecisionRunStatus,
     PatternStatus,
+    ReviewDeliveryEventType,
     ReviewStatus,
 )
 from d_brain.services.decision_store import DecisionStore
@@ -286,6 +287,84 @@ class DecisionStoreTests(unittest.TestCase):
         loaded = self.store.get_review(review.id)
         self.assertEqual(loaded.claimed_by, "worker-b")
         self.assertEqual(loaded.claim_expires_at, self.current_time + timedelta(minutes=5))
+
+    def test_append_review_delivery_event_persists_claimed_event(self) -> None:
+        record = self.store.persist_decision(
+            "workspace-1",
+            decision_run_id=self.store.persist_run("workspace-1", "What next?").id,
+            title="Focus the team",
+            decision_summary="One priority.",
+            chosen_option="Initiative A",
+            rejected_options=["Initiative B"],
+            why="Best evidence.",
+            risks="Misses other options.",
+            expected_signals=["more activations"],
+            confidence=0.8,
+        )
+        review = self.store.create_review(
+            workspace_id="workspace-1",
+            decision_record_id=record.id,
+            due_at=self.current_time - timedelta(days=1),
+            expected_outcome="More activations",
+        )
+
+        event = self.store.append_review_delivery_event(
+            review_id=review.id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.CLAIMED,
+            worker_id="worker-a",
+            metadata={"lease_seconds": 300},
+        )
+
+        self.assertEqual(event.review_id, review.id)
+        self.assertEqual(event.worker_id, "worker-a")
+        self.assertEqual(event.event_type, ReviewDeliveryEventType.CLAIMED)
+        self.assertEqual(event.metadata, {"lease_seconds": 300})
+        self.assertEqual(event.created_at, self.current_time)
+
+    def test_append_review_delivery_event_persists_failed_and_released_events_in_order(self) -> None:
+        record = self.store.persist_decision(
+            "workspace-1",
+            decision_run_id=self.store.persist_run("workspace-1", "What next?").id,
+            title="Focus the team",
+            decision_summary="One priority.",
+            chosen_option="Initiative A",
+            rejected_options=["Initiative B"],
+            why="Best evidence.",
+            risks="Misses other options.",
+            expected_signals=["more activations"],
+            confidence=0.8,
+        )
+        review = self.store.create_review(
+            workspace_id="workspace-1",
+            decision_record_id=record.id,
+            due_at=self.current_time - timedelta(days=1),
+            expected_outcome="More activations",
+        )
+
+        self.store.append_review_delivery_event(
+            review_id=review.id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.FAILED,
+            worker_id="worker-a",
+            error_code="RuntimeError",
+            error_message="boom",
+            metadata={"chat_id": 42},
+        )
+        self.current_time = self.current_time + timedelta(seconds=1)
+        self.store.append_review_delivery_event(
+            review_id=review.id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.RELEASED,
+            worker_id="worker-a",
+            metadata={"reason": "send_failed"},
+        )
+
+        events = self.store.list_review_delivery_events(review.id)
+        self.assertEqual([event.event_type for event in events], [ReviewDeliveryEventType.FAILED, ReviewDeliveryEventType.RELEASED])
+        self.assertEqual(events[0].error_code, "RuntimeError")
+        self.assertEqual(events[0].metadata, {"chat_id": 42})
+        self.assertEqual(events[1].metadata, {"reason": "send_failed"})
 
     def test_persists_and_lists_patterns(self) -> None:
         pattern = self.store.persist_pattern(

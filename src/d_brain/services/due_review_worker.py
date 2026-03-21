@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from d_brain.services.decision_models import ReviewDeliveryEventType
 from d_brain.services.decision_store import DecisionStore
 
 
@@ -88,16 +89,58 @@ class DueReviewWorker:
         """Persist successful proactive delivery for a review prompt."""
         store, created_store = self._open_store()
         try:
-            store.mark_review_notified(review_id, notified_at=self._now(), claimer_id=self.worker_id)
+            with store.transaction():
+                updated = store.mark_review_notified(review_id, notified_at=self._now(), claimer_id=self.worker_id)
+                store.append_review_delivery_event(
+                    review_id=updated.id,
+                    workspace_id=updated.workspace_id,
+                    event_type=ReviewDeliveryEventType.DELIVERED,
+                    worker_id=self.worker_id,
+                )
         finally:
             if created_store and isinstance(store, DecisionStore):
                 store.close()
 
-    def release_prompt_delivery(self, review_id: int) -> None:
+    def record_failed_prompt_delivery(
+        self,
+        review_id: int,
+        *,
+        chat_id: int | None = None,
+        error: Exception,
+    ) -> None:
+        """Persist a failed proactive delivery attempt."""
+        store, created_store = self._open_store()
+        try:
+            review = store.get_review(review_id)
+            metadata: dict[str, object] = {}
+            if chat_id is not None:
+                metadata["chat_id"] = chat_id
+            store.append_review_delivery_event(
+                review_id=review.id,
+                workspace_id=review.workspace_id,
+                event_type=ReviewDeliveryEventType.FAILED,
+                worker_id=self.worker_id,
+                error_code=error.__class__.__name__,
+                error_message=str(error),
+                metadata=metadata,
+            )
+        finally:
+            if created_store and isinstance(store, DecisionStore):
+                store.close()
+
+    def release_prompt_delivery(self, review_id: int, *, reason: str = "send_failed") -> None:
         """Release a failed proactive delivery claim for retry."""
         store, created_store = self._open_store()
         try:
-            store.release_review_claim(review_id, claimer_id=self.worker_id)
+            with store.transaction():
+                released = store.release_review_claim(review_id, claimer_id=self.worker_id)
+                store.append_review_delivery_event(
+                    review_id=released.id,
+                    workspace_id=released.workspace_id,
+                    event_type=ReviewDeliveryEventType.RELEASED,
+                    worker_id=self.worker_id,
+                    metadata={"reason": reason},
+                )
         finally:
             if created_store and isinstance(store, DecisionStore):
                 store.close()

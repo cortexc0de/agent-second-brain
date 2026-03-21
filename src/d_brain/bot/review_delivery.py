@@ -34,9 +34,13 @@ async def deliver_due_reviews(
             worker.acknowledge_prompt_delivery(prompt.review_id)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             try:
-                worker.release_prompt_delivery(prompt.review_id)
+                worker.record_failed_prompt_delivery(prompt.review_id, chat_id=prompt.user_id, error=exc)
+            except Exception:
+                logger.exception("Due review failure trace persistence failed for review %s", prompt.review_id)
+            try:
+                worker.release_prompt_delivery(prompt.review_id, reason="send_failed")
             except Exception:
                 logger.exception("Due review claim release failed for review %s", prompt.review_id)
             logger.exception("Due review delivery failed for review %s", prompt.review_id)

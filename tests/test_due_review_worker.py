@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from d_brain.services.decision_store import DecisionStore
+from d_brain.services.decision_models import ReviewDeliveryEventType
 from d_brain.services.due_review_worker import DueReviewWorker
 
 
@@ -105,6 +106,17 @@ class DueReviewWorkerTests(unittest.TestCase):
         loaded = self.store.get_review(review_id)
         self.assertEqual(loaded.claimed_by, "worker-a")
         self.assertEqual(loaded.claim_expires_at, self.current_time + timedelta(minutes=5))
+        events = self.store.list_review_delivery_events(review_id)
+        self.assertEqual([event.event_type for event in events], [ReviewDeliveryEventType.CLAIMED])
+
+    def test_collect_due_prompts_does_not_create_duplicate_claim_trace_for_already_claimed_review(self) -> None:
+        review_id = self._seed_review("42", due_at=self.current_time - timedelta(days=1))
+
+        self.worker.collect_due_prompts()
+        self.worker.collect_due_prompts()
+
+        events = self.store.list_review_delivery_events(review_id)
+        self.assertEqual([event.event_type for event in events], [ReviewDeliveryEventType.CLAIMED])
 
     def test_collect_due_prompts_does_not_pick_review_claimed_by_other_worker_until_lease_expires(self) -> None:
         review_id = self._seed_review("42", due_at=self.current_time - timedelta(days=1))

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from d_brain.bot import review_delivery
+from d_brain.services.decision_models import ReviewDeliveryEventType
 from d_brain.services.decision_store import DecisionStore
 from d_brain.services.due_review_worker import DueReviewWorker
 
@@ -29,6 +30,8 @@ class ReviewDeliveryTests(unittest.IsolatedAsyncioTestCase):
         worker.acknowledge_prompt_delivery.assert_has_calls(
             [unittest.mock.call(1), unittest.mock.call(2)]
         )
+        worker.record_failed_prompt_delivery.assert_not_called()
+        worker.release_prompt_delivery.assert_not_called()
         bot.send_message.assert_has_awaits(
             [
                 unittest.mock.call(chat_id=42, text="first"),
@@ -52,6 +55,11 @@ class ReviewDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent_count, 1)
         self.assertEqual(bot.send_message.await_count, 2)
         worker.acknowledge_prompt_delivery.assert_called_once_with(2)
+        failed_call = worker.record_failed_prompt_delivery.call_args
+        self.assertEqual(failed_call.args[0], 1)
+        self.assertEqual(failed_call.kwargs["chat_id"], 42)
+        self.assertEqual(type(failed_call.kwargs["error"]).__name__, "RuntimeError")
+        worker.release_prompt_delivery.assert_called_once_with(1, reason="send_failed")
         logger.exception.assert_called_once()
 
     async def test_deliver_due_reviews_acknowledges_only_successful_prompts_in_partial_failure_batch(self) -> None:
@@ -147,6 +155,17 @@ class ReviewDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 review = store.get_review(1)
                 self.assertEqual(review.status.value, "due")
                 self.assertEqual(review.notified_at, current_time)
+                events = store.list_review_delivery_events(review.id)
+                self.assertEqual(
+                    [event.event_type for event in events],
+                    [
+                        ReviewDeliveryEventType.CLAIMED,
+                        ReviewDeliveryEventType.FAILED,
+                        ReviewDeliveryEventType.RELEASED,
+                        ReviewDeliveryEventType.CLAIMED,
+                        ReviewDeliveryEventType.DELIVERED,
+                    ],
+                )
             finally:
                 store.close()
 
@@ -188,6 +207,18 @@ class ReviewDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(first_sent, 0)
                 self.assertEqual(second_sent, 1)
                 self.assertEqual(bot.send_message.await_count, 2)
+                events = store.list_review_delivery_events(1)
+                self.assertEqual(
+                    [event.event_type for event in events],
+                    [
+                        ReviewDeliveryEventType.CLAIMED,
+                        ReviewDeliveryEventType.FAILED,
+                        ReviewDeliveryEventType.RELEASED,
+                        ReviewDeliveryEventType.CLAIMED,
+                        ReviewDeliveryEventType.DELIVERED,
+                    ],
+                )
+                self.assertEqual(events[1].error_code, "RuntimeError")
             finally:
                 store.close()
 

@@ -42,6 +42,15 @@ class PatternStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class ReviewDeliveryEventType(str, Enum):
+    """Append-only lifecycle events for proactive review delivery."""
+
+    CLAIMED = "claimed"
+    FAILED = "failed"
+    RELEASED = "released"
+    DELIVERED = "delivered"
+
+
 @dataclass(slots=True)
 class DecisionRun:
     """Stored decision request and processing state."""
@@ -103,6 +112,21 @@ class ReviewRecord:
     notified_at: datetime | None = None
     claimed_by: str | None = None
     claim_expires_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class ReviewDeliveryEvent:
+    """Audit event for proactive review delivery lifecycle."""
+
+    id: int
+    review_id: int
+    workspace_id: str
+    event_type: ReviewDeliveryEventType
+    worker_id: str | None
+    error_code: str | None
+    error_message: str | None
+    metadata: dict[str, object]
+    created_at: datetime
 
 
 @dataclass(slots=True)
