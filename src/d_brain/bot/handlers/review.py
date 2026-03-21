@@ -41,6 +41,30 @@ async def cmd_review(message: Message) -> None:
     await message.answer(result)
 
 
+@router.message(Command("review_trace"))
+async def cmd_review_trace(message: Message, command: CommandObject) -> None:
+    """Show proactive delivery trace for a review."""
+    user_id = await _require_user_id(message)
+    if user_id is None:
+        return
+    if not command.args or not command.args.strip().isdigit():
+        await message.answer(
+            "🔎 <b>Формат:</b> <code>/review_trace ID</code>\n\n"
+            "Пример:\n"
+            "<code>/review_trace 3</code>"
+        )
+        return
+
+    service = _build_review_service()
+    try:
+        result = service.render_review_trace(user_id, int(command.args.strip()))
+    except ReviewServiceError as exc:
+        await message.answer(f"❌ <b>Ошибка:</b> {exc}")
+        return
+
+    await message.answer(result)
+
+
 @router.message(Command("review_done"))
 async def cmd_review_done(message: Message, command: CommandObject) -> None:
     """Complete a review with a short outcome note."""

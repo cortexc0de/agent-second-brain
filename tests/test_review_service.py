@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from d_brain.services.decision_models import DecisionOutcomeStatus, PatternStatus
+from d_brain.services.decision_models import DecisionOutcomeStatus, PatternStatus, ReviewDeliveryEventType
 from d_brain.services.decision_store import DecisionStore
 from d_brain.services.review_service import ReviewService, ReviewServiceError
 
@@ -109,6 +109,51 @@ class ReviewServiceTests(unittest.TestCase):
         self.assertIn("Review пропущен", rendered)
         updated = self.store.get_review(review_id)
         self.assertEqual(updated.status.value, "skipped")
+
+    def test_render_review_trace_shows_delivery_event_history(self) -> None:
+        review_id = self._seed_due_review()
+        review = self.store.get_review(review_id)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.CLAIMED,
+            worker_id="worker-a",
+            metadata={"claim_expires_at": self.current_time.isoformat()},
+        )
+        self.current_time = self.current_time + timedelta(seconds=1)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.FAILED,
+            worker_id="worker-a",
+            error_code="RuntimeError",
+            error_message="boom",
+            metadata={"chat_id": 42},
+        )
+        self.current_time = self.current_time + timedelta(seconds=1)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.RELEASED,
+            worker_id="worker-a",
+            metadata={"reason": "send_failed"},
+        )
+
+        rendered = self.service.render_review_trace(42, review_id)
+
+        self.assertIn("Delivery Trace", rendered)
+        self.assertIn(f"<code>{review_id}</code>", rendered)
+        self.assertIn("claimed", rendered)
+        self.assertIn("failed", rendered)
+        self.assertIn("released", rendered)
+        self.assertIn("RuntimeError", rendered)
+        self.assertIn("worker-a", rendered)
+
+    def test_render_review_trace_rejects_foreign_review(self) -> None:
+        review_id = self._seed_due_review("workspace-1")
+
+        with self.assertRaises(ReviewServiceError):
+            self.service.render_review_trace(42, review_id)
 
     def test_complete_review_softens_linked_pattern_when_decision_is_confirmed(self) -> None:
         review_id = self._seed_due_review()

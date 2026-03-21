@@ -131,6 +131,61 @@ class ReviewService:
             if created_store and isinstance(store, DecisionStore):
                 store.close()
 
+    def render_review_trace(self, user_id: int, review_id: int, limit: int = 10) -> str:
+        """Render proactive delivery trace for a specific review."""
+        store, created_store = self._open_store()
+        try:
+            review = store.get_review(review_id)
+            self._ensure_owner(review, user_id)
+            record = store.get_record(review.decision_record_id)
+            events = store.list_review_delivery_events(review_id, limit=limit)
+
+            parts = [
+                "🔎 <b>Delivery Trace</b>",
+                "",
+                f"<b>ID:</b> <code>{review.id}</code>",
+                f"<b>Решение:</b> {html.escape(record.title)}",
+                f"<b>Статус review:</b> {html.escape(review.status.value)}",
+            ]
+            if review.notified_at is not None:
+                parts.append(f"<b>Notified at:</b> {html.escape(review.notified_at.isoformat())}")
+            if review.claimed_by and review.claim_expires_at is not None:
+                parts.append(
+                    f"<b>Активный claim:</b> {html.escape(review.claimed_by)} до "
+                    f"{html.escape(review.claim_expires_at.isoformat())}"
+                )
+
+            parts.extend(["", "<b>Timeline:</b>"])
+            if not events:
+                parts.append("<i>Trace пока пустой.</i>")
+                return "\n".join(parts)
+
+            for event in events:
+                line = [
+                    html.escape(event.created_at.isoformat()),
+                    html.escape(event.event_type.value),
+                ]
+                if event.worker_id:
+                    line.append(f"worker={html.escape(event.worker_id)}")
+                if event.error_code:
+                    line.append(html.escape(event.error_code))
+                if event.error_message:
+                    line.append(html.escape(event.error_message))
+                if event.metadata:
+                    metadata = ", ".join(
+                        f"{html.escape(str(key))}={html.escape(str(value))}"
+                        for key, value in sorted(event.metadata.items())
+                    )
+                    if metadata:
+                        line.append(metadata)
+                parts.append(f"• {' — '.join(line)}")
+            return "\n".join(parts)
+        except DecisionStoreError as exc:
+            raise ReviewServiceError(str(exc)) from exc
+        finally:
+            if created_store and isinstance(store, DecisionStore):
+                store.close()
+
     def complete_review(self, user_id: int, review_id: int, outcome: str) -> str:
         """Mark a review as completed and return a confirmation message."""
         if not outcome.strip():

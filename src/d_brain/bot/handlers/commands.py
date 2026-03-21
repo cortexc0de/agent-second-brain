@@ -30,6 +30,7 @@ async def cmd_start(message: Message) -> None:
         "/process - обработать записи\n"
         "/decide - получить жёсткую рекомендацию\n"
         "/review - проверить старые решения\n"
+        "/review_trace - посмотреть trace доставки review\n"
         "/do - выполнить произвольный запрос\n"
         "/weekly - недельный дайджест\n"
         "/help - справка",
@@ -53,10 +54,12 @@ async def cmd_help(message: Message) -> None:
         "/process - обработать записи\n"
         "/decide - принять решение на 7-14 дней\n"
         "/review - посмотреть due reviews\n"
+        "/review_trace - посмотреть delivery trace review\n"
         "/do - выполнить произвольный запрос\n"
         "/weekly - недельный дайджест\n\n"
         "<i>Пример: /decide у меня 3 направления, не понимаю, что оставить на 2 недели</i>\n"
         "<i>Пример: /review_done 3 активации выросли, фокус подтвердился</i>\n"
+        "<i>Пример: /review_trace 3</i>\n"
         "<i>Пример: /do перенеси просроченные задачи на понедельник</i>"
     )
 

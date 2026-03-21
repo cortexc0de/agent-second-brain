@@ -99,6 +99,9 @@ def _install_project_stubs() -> None:
             def render_review_overview(self, user_id: int) -> str:
                 return str(user_id)
 
+            def render_review_trace(self, user_id: int, review_id: int) -> str:
+                return f"trace:{user_id}:{review_id}"
+
             def complete_review(self, user_id: int, review_id: int, outcome: str) -> str:
                 return f"{user_id}:{review_id}:{outcome}"
 
@@ -248,6 +251,77 @@ class ReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(review, "_build_review_service", return_value=service):
             await review.cmd_review(message)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("Ошибка", reply_text)
+        self.assertIn("boom", reply_text)
+
+    async def test_cmd_review_trace_requires_review_id(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args=None)
+
+        await review.cmd_review_trace(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("/review_trace ID", reply_text)
+
+    async def test_cmd_review_trace_rejects_missing_user(self) -> None:
+        message = SimpleNamespace(
+            from_user=None,
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7")
+
+        await review.cmd_review_trace(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("Не удалось определить пользователя", reply_text)
+
+    async def test_cmd_review_trace_rejects_non_numeric_review_id(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="abc")
+
+        await review.cmd_review_trace(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("/review_trace ID", reply_text)
+
+    async def test_cmd_review_trace_renders_trace(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7")
+        service = MagicMock()
+        service.render_review_trace.return_value = "trace"
+
+        with patch.object(review, "_build_review_service", return_value=service):
+            await review.cmd_review_trace(message, command)
+
+        service.render_review_trace.assert_called_once_with(42, 7)
+        message.answer.assert_awaited_once_with("trace")
+
+    async def test_cmd_review_trace_handles_service_error(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7")
+        service = MagicMock()
+        service.render_review_trace.side_effect = ReviewServiceError("boom")
+
+        with patch.object(review, "_build_review_service", return_value=service):
+            await review.cmd_review_trace(message, command)
 
         message.answer.assert_awaited_once()
         reply_text = message.answer.await_args.args[0]
