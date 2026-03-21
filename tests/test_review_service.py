@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from d_brain.services.decision_models import DecisionOutcomeStatus
+from d_brain.services.decision_models import DecisionOutcomeStatus, PatternStatus
 from d_brain.services.decision_store import DecisionStore
 from d_brain.services.review_service import ReviewService, ReviewServiceError
 
@@ -37,12 +37,23 @@ class ReviewServiceTests(unittest.TestCase):
             why="Highest evidence.",
             risks="Sample too small.",
             expected_signals=["more activations"],
+            linked_pattern_names=["focus_fragmentation"],
         )
         review = self.store.create_review(
             workspace_id=workspace_id,
             decision_record_id=record.id,
             due_at=self.current_time - timedelta(days=1),
             expected_outcome="more activations",
+        )
+        self.store.persist_pattern(
+            workspace_id,
+            name="focus_fragmentation",
+            category="decision_pattern",
+            description="Ты снова пытаешься удерживать слишком много направлений одновременно.",
+            evidence=["В запросе есть признаки перегрузки и множественного выбора."],
+            confidence=0.6,
+            status=PatternStatus.WATCH,
+            last_seen_at=self.current_time - timedelta(days=2),
         )
         return review.id
 
@@ -84,6 +95,11 @@ class ReviewServiceTests(unittest.TestCase):
         record = self.store.get_record(updated.decision_record_id)
         self.assertEqual(record.outcome_status, DecisionOutcomeStatus.INVALIDATED)
         self.assertTrue(record.needs_follow_up)
+        patterns = self.store.list_patterns("42")
+        focus_pattern = next(pattern for pattern in patterns if pattern.name == "focus_fragmentation")
+        self.assertEqual(focus_pattern.status, PatternStatus.ACTIVE)
+        self.assertGreaterEqual(focus_pattern.confidence, 0.85)
+        self.assertIn("invalidated", " ".join(focus_pattern.evidence))
 
     def test_skip_review_updates_status(self) -> None:
         review_id = self._seed_due_review()
@@ -93,6 +109,16 @@ class ReviewServiceTests(unittest.TestCase):
         self.assertIn("Review пропущен", rendered)
         updated = self.store.get_review(review_id)
         self.assertEqual(updated.status.value, "skipped")
+
+    def test_complete_review_softens_linked_pattern_when_decision_is_confirmed(self) -> None:
+        review_id = self._seed_due_review()
+
+        self.service.complete_review(42, review_id, "Активации выросли, фокус подтвердился")
+
+        patterns = self.store.list_patterns("42")
+        focus_pattern = next(pattern for pattern in patterns if pattern.name == "focus_fragmentation")
+        self.assertEqual(focus_pattern.status, PatternStatus.WATCH)
+        self.assertIn("confirmed", " ".join(focus_pattern.evidence))
 
     def test_skip_review_rejects_foreign_review(self) -> None:
         review_id = self._seed_due_review("workspace-1")

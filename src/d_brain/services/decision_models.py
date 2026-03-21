@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
@@ -82,6 +82,7 @@ class DecisionRecord:
     outcome_summary: str | None = None
     last_reviewed_at: datetime | None = None
     needs_follow_up: bool = False
+    linked_pattern_names: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

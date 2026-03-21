@@ -144,6 +144,7 @@ class DecisionService:
                                     why="\n".join(why_lines),
                                     risks="\n".join(risk_lines),
                                     expected_signals=check_signals,
+                                    linked_pattern_names=[pattern.name for pattern in detected_patterns],
                                     time_horizon_days=int(decision.get("check_in_days") or self.horizon_days),
                                     confidence=float(decision.get("confidence") or 0.0),
                                 )
@@ -177,6 +178,7 @@ class DecisionService:
                                 why="\n".join(why_lines),
                                 risks="\n".join(risk_lines),
                                 expected_signals=check_signals,
+                                linked_pattern_names=[pattern.name for pattern in detected_patterns],
                                 time_horizon_days=int(decision.get("check_in_days") or self.horizon_days),
                                 confidence=float(decision.get("confidence") or 0.0),
                             )

@@ -79,6 +79,7 @@ class DecisionStore:
                     why TEXT NOT NULL,
                     risks TEXT NOT NULL,
                     expected_signals_json TEXT NOT NULL,
+                    linked_pattern_names_json TEXT NOT NULL DEFAULT '[]',
                     time_horizon_days INTEGER NOT NULL,
                     review_date TEXT NOT NULL,
                     confidence REAL NOT NULL,
@@ -141,6 +142,7 @@ class DecisionStore:
             "outcome_summary": "ALTER TABLE decision_records ADD COLUMN outcome_summary TEXT",
             "last_reviewed_at": "ALTER TABLE decision_records ADD COLUMN last_reviewed_at TEXT",
             "needs_follow_up": "ALTER TABLE decision_records ADD COLUMN needs_follow_up INTEGER NOT NULL DEFAULT 0",
+            "linked_pattern_names_json": "ALTER TABLE decision_records ADD COLUMN linked_pattern_names_json TEXT NOT NULL DEFAULT '[]'",
         }
         with self._conn:
             for column, statement in migrations.items():
@@ -272,6 +274,7 @@ class DecisionStore:
         why: str,
         risks: str,
         expected_signals: list[str],
+        linked_pattern_names: list[str] | None = None,
         decision_type: str = "decision",
         time_horizon_days: int = 14,
         review_date: datetime | None = None,
@@ -290,6 +293,7 @@ class DecisionStore:
             why=why,
             risks=risks,
             expected_signals=expected_signals,
+            linked_pattern_names=linked_pattern_names or [],
             time_horizon_days=time_horizon_days,
             review_date=due_date,
             confidence=confidence,
@@ -396,6 +400,7 @@ class DecisionStore:
         why: str,
         risks: str,
         expected_signals: list[str],
+        linked_pattern_names: list[str],
         time_horizon_days: int,
         review_date: datetime,
         confidence: float,
@@ -415,6 +420,7 @@ class DecisionStore:
                     why,
                     risks,
                     expected_signals_json,
+                    linked_pattern_names_json,
                     time_horizon_days,
                     review_date,
                     confidence,
@@ -424,7 +430,7 @@ class DecisionStore:
                     needs_follow_up,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     workspace_id,
@@ -437,6 +443,7 @@ class DecisionStore:
                     why,
                     risks,
                     self._dump_json_list(expected_signals),
+                    self._dump_json_list(linked_pattern_names),
                     time_horizon_days,
                     self._serialize_datetime(review_date),
                     confidence,
@@ -847,6 +854,7 @@ class DecisionStore:
                 else None
             ),
             needs_follow_up=bool(row["needs_follow_up"]),
+            linked_pattern_names=DecisionStore._load_json_list(row["linked_pattern_names_json"]),
         )
 
     @staticmethod

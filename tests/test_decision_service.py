@@ -107,6 +107,10 @@ class DecisionServiceTests(unittest.TestCase):
                 self.assertEqual(len(records), 1)
                 self.assertEqual(records[0].chosen_option, "Сфокусируйся на onboarding")
                 self.assertEqual(records[0].expected_signals, ["рост активаций", "меньше drop-off"])
+                self.assertEqual(
+                    records[0].linked_pattern_names,
+                    ["focus_fragmentation", "analysis_paralysis"],
+                )
 
                 reviews = store.list_reviews("42")
                 self.assertEqual(len(reviews), 1)

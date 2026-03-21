@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import html
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from d_brain.services.decision_models import DecisionOutcomeStatus, ReviewRecord, ReviewStatus
 from d_brain.services.decision_store import DecisionStore, DecisionStoreError
+from d_brain.services.review_pattern_feedback import build_pattern_feedback
 from d_brain.services.review_outcome_analyzer import (
     ReviewOutcomeStatus,
     analyze_review_outcome,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ReviewServiceError(RuntimeError):
@@ -152,6 +156,35 @@ class ReviewService:
                 outcome_summary=outcome.strip(),
                 needs_follow_up=assessment.needs_follow_up,
             )
+            outcome_status = self._map_outcome_status(assessment.status)
+            if record.linked_pattern_names:
+                existing_patterns = {
+                    pattern.name: pattern
+                    for pattern in store.list_patterns(str(user_id), limit=50)
+                }
+                for pattern_name in record.linked_pattern_names:
+                    pattern = existing_patterns.get(pattern_name)
+                    if pattern is None:
+                        continue
+                    feedback = build_pattern_feedback(
+                        pattern,
+                        outcome_status,
+                        review_id=updated.id,
+                        outcome_summary=outcome.strip(),
+                    )
+                    try:
+                        store.persist_pattern(
+                            user_id,
+                            name=pattern.name,
+                            category=feedback.category,
+                            description=feedback.description,
+                            evidence=feedback.evidence,
+                            confidence=feedback.confidence,
+                            status=feedback.status,
+                            last_seen_at=self._now(),
+                        )
+                    except Exception:
+                        logger.warning("Pattern feedback persistence failed", exc_info=True)
             follow_up_line = "Да" if assessment.needs_follow_up else "Нет"
             return (
                 "✅ <b>Review закрыт</b>\n\n"

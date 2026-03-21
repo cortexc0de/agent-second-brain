@@ -73,6 +73,7 @@ class DecisionStoreTests(unittest.TestCase):
         self.assertEqual(record.rejected_options, ["Landing page tweak", "New feature"])
         self.assertEqual(record.expected_signals, ["more activations", "fewer drop-offs"])
         self.assertEqual(record.review_date, self.current_time + timedelta(days=14))
+        self.assertEqual(record.linked_pattern_names, [])
         self.assertEqual(record.outcome_status, DecisionOutcomeStatus.UNKNOWN)
         self.assertIsNone(record.outcome_summary)
         self.assertFalse(record.needs_follow_up)
@@ -115,6 +116,7 @@ class DecisionStoreTests(unittest.TestCase):
 
         self.assertEqual(loaded_run.final_verdict, "Focus on the onboarding flow.")
         self.assertEqual(loaded_record.chosen_option, "Onboarding")
+        self.assertEqual(loaded_record.linked_pattern_names, [])
         self.assertEqual(loaded_record.outcome_status, DecisionOutcomeStatus.UNKNOWN)
         self.assertEqual(loaded_review.status, ReviewStatus.COMPLETED)
         self.assertEqual(loaded_review.actual_outcome, "Conversion improved and support tickets dropped.")
@@ -283,6 +285,29 @@ class DecisionStoreTests(unittest.TestCase):
         self.assertEqual(reloaded.outcome_summary, "Активация не выросла, фокус не подтвердился.")
         self.assertEqual(reloaded.last_reviewed_at, self.current_time)
         self.assertTrue(reloaded.needs_follow_up)
+
+    def test_persist_decision_stores_linked_pattern_names(self) -> None:
+        run = self.store.persist_run("workspace-1", "Should I double down?")
+        record = self.store.persist_decision(
+            "workspace-1",
+            decision_run_id=run.id,
+            title="Double down on onboarding",
+            decision_summary="Ignore side paths and focus on onboarding",
+            chosen_option="Onboarding",
+            rejected_options=["New feature"],
+            why="Best signal",
+            risks="Could be noise",
+            expected_signals=["activation up"],
+            linked_pattern_names=["focus_fragmentation", "analysis_paralysis"],
+        )
+
+        self.assertEqual(record.linked_pattern_names, ["focus_fragmentation", "analysis_paralysis"])
+
+        self.store.close()
+        self.store = DecisionStore(self.db_path, clock=self.clock)
+
+        reloaded = self.store.get_record(record.id)
+        self.assertEqual(reloaded.linked_pattern_names, ["focus_fragmentation", "analysis_paralysis"])
 
 
 if __name__ == "__main__":
