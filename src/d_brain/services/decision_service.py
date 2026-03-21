@@ -172,6 +172,22 @@ class DecisionService:
         return " · ".join(parts)
 
     @staticmethod
+    def _render_truncation_footer(total_count: int, shown_count: int) -> str:
+        hidden_count = total_count - shown_count
+        if hidden_count <= 0:
+            return ""
+
+        tail10 = hidden_count % 10
+        tail100 = hidden_count % 100
+        if tail10 == 1 and tail100 != 11:
+            noun = "решение"
+        elif tail10 in {2, 3, 4} and tail100 not in {12, 13, 14}:
+            noun = "решения"
+        else:
+            noun = "решений"
+        return f"<i>ещё {hidden_count} {noun} вне среза</i>"
+
+    @staticmethod
     def _render_outcome_label(record: Any) -> str:
         status = record.outcome_status.value
         labels = {
@@ -254,7 +270,7 @@ class DecisionService:
                 review.decision_record_id: review
                 for review in store.list_reviews(str(user_id))
             }
-            records = sorted(
+            all_records = sorted(
                 store.list_records(str(user_id)),
                 key=lambda record: (
                     self._decision_section_key(record, reviews_by_record_id.get(record.id)),
@@ -263,7 +279,8 @@ class DecisionService:
                         reviews_by_record_id.get(record.id),
                     ),
                 ),
-            )[:limit]
+            )
+            records = all_records[:limit]
             if not records:
                 return "🗂️ <b>Пока нет сохранённых решений</b>"
 
@@ -312,6 +329,10 @@ class DecisionService:
                     if next_action:
                         parts.append(next_action)
                     parts.append(f"<code>/decide_trace {run.id}</code>")
+
+            truncation_footer = self._render_truncation_footer(len(all_records), len(records))
+            if truncation_footer:
+                parts.extend(["", truncation_footer])
 
             return "\n".join(parts)
         except DecisionStoreError as exc:

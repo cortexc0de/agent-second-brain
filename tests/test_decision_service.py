@@ -620,6 +620,53 @@ class DecisionServiceTests(unittest.TestCase):
                 self.assertIn("Due Soon: 1", rendered)
                 self.assertIn("Stable: 1", rendered)
 
+    def test_render_recent_decisions_shows_hidden_count_footer_when_limited(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                first = service.decide("Решение 1", user_id=42)
+                second = service.decide("Решение 2", user_id=42)
+                third = service.decide("Решение 3", user_id=42)
+
+                self.assertNotIn("error", first)
+                self.assertNotIn("error", second)
+                self.assertNotIn("error", third)
+
+                rendered = service.render_recent_decisions(42, limit=2)
+
+                self.assertIn("ещё 1 решение вне среза", rendered)
+                self.assertNotIn("Решение 1", rendered)
+
+    def test_render_recent_decisions_omits_hidden_count_footer_when_not_truncated(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                first = service.decide("Решение A", user_id=42)
+                second = service.decide("Решение B", user_id=42)
+
+                self.assertNotIn("error", first)
+                self.assertNotIn("error", second)
+
+                rendered = service.render_recent_decisions(42, limit=5)
+
+                self.assertNotIn("вне среза", rendered)
+
     def test_render_recent_decisions_shows_empty_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "decision-store.sqlite3"
