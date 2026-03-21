@@ -126,6 +126,8 @@ class DecisionStore:
                     ON review_records(status, due_at, id);
                 CREATE INDEX IF NOT EXISTS idx_patterns_workspace
                     ON pattern_records(workspace_id, id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_patterns_workspace_name
+                    ON pattern_records(workspace_id, name);
                 """
             )
         self._migrate_schema()
@@ -647,9 +649,26 @@ class DecisionStore:
         last_seen_at: datetime | None = None,
     ) -> PatternRecord:
         """Persist a deterministic pattern record."""
-        return self.create_pattern(
-            workspace_id=self._workspace_key(workspace_id_or_user_id),
-            name=name,
+        workspace_id = self._workspace_key(workspace_id_or_user_id)
+        existing = self._conn.execute(
+            "SELECT id FROM pattern_records WHERE workspace_id = ? AND name = ?",
+            (workspace_id, name),
+        ).fetchone()
+
+        if existing is None:
+            return self.create_pattern(
+                workspace_id=workspace_id,
+                name=name,
+                category=category,
+                description=description,
+                evidence=evidence,
+                confidence=confidence,
+                status=status,
+                last_seen_at=last_seen_at or self._now(),
+            )
+
+        return self.update_pattern(
+            int(existing["id"]),
             category=category,
             description=description,
             evidence=evidence,
@@ -711,6 +730,48 @@ class DecisionStore:
             raise DecisionStoreError(f"Pattern record {pattern_id} not found")
         return self._row_to_pattern(row)
 
+    def update_pattern(
+        self,
+        pattern_id: int,
+        *,
+        category: str,
+        description: str,
+        evidence: list[str],
+        confidence: float,
+        status: PatternStatus = PatternStatus.ACTIVE,
+        last_seen_at: datetime | None = None,
+    ) -> PatternRecord:
+        pattern = self.get_pattern(pattern_id)
+        merged_evidence = self._merge_evidence(pattern.evidence, evidence)
+        updated_at = self._now()
+        seen_at = last_seen_at or updated_at
+
+        with self._write():
+            self._conn.execute(
+                """
+                UPDATE pattern_records
+                SET category = ?,
+                    description = ?,
+                    evidence_json = ?,
+                    confidence = ?,
+                    status = ?,
+                    last_seen_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    category,
+                    description,
+                    self._dump_json_list(merged_evidence),
+                    max(pattern.confidence, confidence),
+                    self._pattern_status_value(status),
+                    self._serialize_datetime(seen_at),
+                    self._serialize_datetime(updated_at),
+                    pattern_id,
+                ),
+            )
+        return self.get_pattern(pattern_id)
+
     def list_patterns(
         self,
         workspace_id: str | None = None,
@@ -734,6 +795,15 @@ class DecisionStore:
             params.append(limit)
         rows = self._conn.execute(query, params).fetchall()
         return [self._row_to_pattern(row) for row in rows]
+
+    @staticmethod
+    def _merge_evidence(existing: list[str], incoming: list[str]) -> list[str]:
+        merged: list[str] = []
+        for item in [*existing, *incoming]:
+            text = str(item).strip()
+            if text and text not in merged:
+                merged.append(text)
+        return merged
 
     @staticmethod
     def _row_to_run(row: sqlite3.Row) -> DecisionRun:

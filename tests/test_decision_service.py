@@ -187,6 +187,39 @@ class DecisionServiceTests(unittest.TestCase):
                 self.assertEqual(len(store.list_reviews("42")), 1)
                 self.assertEqual(store.list_patterns("42"), [])
 
+    def test_decide_reuses_existing_pattern_records_instead_of_creating_duplicates(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                first = service.decide(
+                    "У меня много направлений и вариантов, не понимаю что выбрать из этого хаоса",
+                    user_id=42,
+                )
+                self.assertNotIn("error", first)
+                first_patterns = store.list_patterns("42")
+                first_ids = {pattern.name: pattern.id for pattern in first_patterns}
+
+                second = service.decide(
+                    "У меня много направлений и вариантов, не понимаю что выбрать из этого хаоса",
+                    user_id=42,
+                )
+                self.assertNotIn("error", second)
+
+                second_patterns = store.list_patterns("42")
+                self.assertEqual(len(second_patterns), len(first_patterns))
+                self.assertEqual(
+                    {pattern.name: pattern.id for pattern in second_patterns},
+                    first_ids,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -216,6 +216,38 @@ class DecisionStoreTests(unittest.TestCase):
         self.assertEqual(reloaded.status, PatternStatus.WATCH)
         self.assertEqual(reloaded.confidence, 0.91)
 
+    def test_persist_pattern_upserts_existing_pattern_by_workspace_and_name(self) -> None:
+        original = self.store.persist_pattern(
+            "workspace-1",
+            name="focus_fragmentation",
+            category="decision_pattern",
+            description="Old description",
+            evidence=["Seen once."],
+            confidence=0.55,
+            status=PatternStatus.WATCH,
+            last_seen_at=self.current_time,
+        )
+
+        self.current_time = self.current_time + timedelta(days=1)
+        updated = self.store.persist_pattern(
+            "workspace-1",
+            name="focus_fragmentation",
+            category="decision_pattern",
+            description="New description",
+            evidence=["Seen again.", "Seen once."],
+            confidence=0.81,
+            status=PatternStatus.ACTIVE,
+            last_seen_at=self.current_time,
+        )
+
+        self.assertEqual(updated.id, original.id)
+        self.assertEqual(updated.description, "New description")
+        self.assertEqual(updated.status, PatternStatus.ACTIVE)
+        self.assertEqual(updated.confidence, 0.81)
+        self.assertEqual(updated.last_seen_at, self.current_time)
+        self.assertEqual(updated.evidence, ["Seen once.", "Seen again."])
+        self.assertEqual(len(self.store.list_patterns("workspace-1")), 1)
+
     def test_updates_decision_outcome_and_persists_review_learning(self) -> None:
         run = self.store.persist_run("workspace-1", "Should I double down?")
         record = self.store.persist_decision(
