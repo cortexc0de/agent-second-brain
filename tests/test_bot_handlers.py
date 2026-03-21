@@ -88,6 +88,9 @@ def _install_project_stubs() -> None:
             def render_decision_trace(self, user_id: int, run_id: int) -> str:
                 return f"decision-trace:{user_id}:{run_id}"
 
+            def render_recent_decisions(self, user_id: int) -> str:
+                return f"recent-decisions:{user_id}"
+
         decision_service_module.DecisionService = DecisionService
         decision_service_module.DecisionServiceError = DecisionServiceError
         sys.modules["d_brain.services.decision_service"] = decision_service_module
@@ -272,6 +275,48 @@ class DecideHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(decide, "_build_decision_service", return_value=service):
             await decide.cmd_decide_trace(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("Ошибка", reply_text)
+        self.assertIn("boom", reply_text)
+
+    async def test_cmd_decisions_rejects_missing_user(self) -> None:
+        message = SimpleNamespace(
+            from_user=None,
+            answer=AsyncMock(),
+        )
+
+        await decide.cmd_decisions(message)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("Не удалось определить пользователя", reply_text)
+
+    async def test_cmd_decisions_renders_recent_decisions(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        service = MagicMock()
+        service.render_recent_decisions.return_value = "recent"
+
+        with patch.object(decide, "_build_decision_service", return_value=service):
+            await decide.cmd_decisions(message)
+
+        service.render_recent_decisions.assert_called_once_with(42)
+        message.answer.assert_awaited_once_with("recent")
+
+    async def test_cmd_decisions_handles_service_error(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        service = MagicMock()
+        service.render_recent_decisions.side_effect = RuntimeError("boom")
+
+        with patch.object(decide, "_build_decision_service", return_value=service):
+            await decide.cmd_decisions(message)
 
         message.answer.assert_awaited_once()
         reply_text = message.answer.await_args.args[0]

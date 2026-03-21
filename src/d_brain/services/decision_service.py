@@ -107,6 +107,50 @@ class DecisionService:
         if str(run.workspace_id) != str(user_id):
             raise DecisionServiceError("Decision trace does not belong to this user")
 
+    def render_recent_decisions(self, user_id: int, limit: int = 5) -> str:
+        """Render a compact overview of latest persisted decisions."""
+        store, created_store = self._open_store()
+        try:
+            records = list(reversed(store.list_records(str(user_id))))[:limit]
+            if not records:
+                return "🗂️ <b>Пока нет сохранённых решений</b>"
+
+            reviews_by_record_id = {
+                review.decision_record_id: review
+                for review in store.list_reviews(str(user_id))
+            }
+            parts = ["🗂️ <b>Последние решения</b>"]
+
+            for record in records:
+                run = store.get_run(record.decision_run_id)
+                self._ensure_owner(run, user_id)
+                review = reviews_by_record_id.get(record.id)
+                parts.extend(
+                    [
+                        "",
+                        f"<b>Run:</b> <code>{run.id}</code>",
+                        f"<b>Запрос:</b> {html.escape(run.request_text)}",
+                        f"<b>Вердикт:</b> {html.escape(record.chosen_option)}",
+                        f"<b>Outcome:</b> {html.escape(record.outcome_status.value)}",
+                    ]
+                )
+                if review is not None:
+                    parts.append(
+                        f"<b>Review:</b> <code>{review.id}</code> ({html.escape(review.status.value)})"
+                    )
+                    parts.append(
+                        f"<code>/review_trace {review.id}</code> · "
+                        f"<code>/review_done {review.id} что получилось</code>"
+                    )
+                parts.append(f"<code>/decide_trace {run.id}</code>")
+
+            return "\n".join(parts)
+        except DecisionStoreError as exc:
+            raise DecisionServiceError(str(exc)) from exc
+        finally:
+            if created_store and isinstance(store, DecisionStore):
+                store.close()
+
     def render_decision_trace(self, user_id: int, run_id: int) -> str:
         """Render a decision trace from existing run/record/review state."""
         store, created_store = self._open_store()

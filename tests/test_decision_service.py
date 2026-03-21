@@ -275,6 +275,64 @@ class DecisionServiceTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     service.render_decision_trace(7, result["decision"]["trace_run_id"])
 
+    def test_render_recent_decisions_shows_latest_records_with_trace_and_review(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                first = service.decide("Первый запрос про фокус", user_id=42)
+                second = service.decide("Второй запрос про приоритет", user_id=42)
+
+                self.assertNotIn("error", first)
+                self.assertNotIn("error", second)
+
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Последние решения", rendered)
+                self.assertIn("Второй запрос про приоритет", rendered)
+                self.assertIn("/decide_trace 2", rendered)
+                self.assertIn("/review_trace 2", rendered)
+                self.assertIn("unknown", rendered)
+
+    def test_render_recent_decisions_shows_empty_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=FakeProcessor(self._decision_payload()),
+                    store=store,
+                )
+
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Пока нет сохранённых решений", rendered)
+
+    def test_render_recent_decisions_rejects_foreign_workspace(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                result = service.decide("Чужое решение", user_id=42)
+
+                self.assertNotIn("error", result)
+                rendered = service.render_recent_decisions(7)
+                self.assertIn("Пока нет сохранённых решений", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
