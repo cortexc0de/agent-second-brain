@@ -25,6 +25,15 @@ class ReviewStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class DecisionOutcomeStatus(str, Enum):
+    """Observed result after a review checkpoint."""
+
+    UNKNOWN = "unknown"
+    CONFIRMED = "confirmed"
+    MIXED = "mixed"
+    INVALIDATED = "invalidated"
+
+
 class PatternStatus(str, Enum):
     """Lifecycle for a behavioral pattern."""
 
@@ -69,6 +78,10 @@ class DecisionRecord:
     confidence: float
     created_at: datetime
     updated_at: datetime
+    outcome_status: DecisionOutcomeStatus = DecisionOutcomeStatus.UNKNOWN
+    outcome_summary: str | None = None
+    last_reviewed_at: datetime | None = None
+    needs_follow_up: bool = False
 
 
 @dataclass(slots=True)

@@ -9,6 +9,7 @@ from typing import Any
 
 from d_brain.services.decision_models import ReviewRecord, ReviewStatus
 from d_brain.services.decision_store import DecisionStore, DecisionStoreError
+from d_brain.services.review_outcome_analyzer import analyze_review_outcome
 
 
 class ReviewServiceError(RuntimeError):
@@ -120,18 +121,28 @@ class ReviewService:
             review = store.get_review(review_id)
             self._ensure_owner(review, user_id)
             record = store.get_record(review.decision_record_id)
+            assessment = analyze_review_outcome(outcome.strip())
             updated = store.update_review(
                 review_id,
                 ReviewStatus.COMPLETED,
-                user_response=outcome.strip(),
-                actual_outcome=outcome.strip(),
-                agent_assessment="Review completed via Telegram command.",
+                user_response=assessment.summary,
+                actual_outcome=assessment.summary,
+                agent_assessment=assessment.agent_assessment,
             )
+            store.update_record_outcome(
+                record.id,
+                outcome_status=assessment.status,
+                outcome_summary=assessment.summary,
+                needs_follow_up=assessment.follow_up_required,
+            )
+            follow_up_line = "Да" if assessment.follow_up_required else "Нет"
             return (
                 "✅ <b>Review закрыт</b>\n\n"
                 f"<b>ID:</b> <code>{updated.id}</code>\n"
                 f"<b>Решение:</b> {html.escape(record.title)}\n"
-                f"<b>Итог:</b> {html.escape(outcome.strip())}"
+                f"<b>Статус:</b> {html.escape(assessment.status.value)}\n"
+                f"<b>Нужен follow-up:</b> {follow_up_line}\n"
+                f"<b>Итог:</b> {html.escape(assessment.summary)}"
             )
         except DecisionStoreError as exc:
             raise ReviewServiceError(str(exc)) from exc

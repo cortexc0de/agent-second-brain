@@ -5,7 +5,12 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from d_brain.services.decision_models import DecisionRunStatus, PatternStatus, ReviewStatus
+from d_brain.services.decision_models import (
+    DecisionOutcomeStatus,
+    DecisionRunStatus,
+    PatternStatus,
+    ReviewStatus,
+)
 from d_brain.services.decision_store import DecisionStore
 
 
@@ -68,6 +73,9 @@ class DecisionStoreTests(unittest.TestCase):
         self.assertEqual(record.rejected_options, ["Landing page tweak", "New feature"])
         self.assertEqual(record.expected_signals, ["more activations", "fewer drop-offs"])
         self.assertEqual(record.review_date, self.current_time + timedelta(days=14))
+        self.assertEqual(record.outcome_status, DecisionOutcomeStatus.UNKNOWN)
+        self.assertIsNone(record.outcome_summary)
+        self.assertFalse(record.needs_follow_up)
 
         self.current_time = self.current_time + timedelta(minutes=5)
         review = self.store.create_review(
@@ -107,6 +115,7 @@ class DecisionStoreTests(unittest.TestCase):
 
         self.assertEqual(loaded_run.final_verdict, "Focus on the onboarding flow.")
         self.assertEqual(loaded_record.chosen_option, "Onboarding")
+        self.assertEqual(loaded_record.outcome_status, DecisionOutcomeStatus.UNKNOWN)
         self.assertEqual(loaded_review.status, ReviewStatus.COMPLETED)
         self.assertEqual(loaded_review.actual_outcome, "Conversion improved and support tickets dropped.")
 
@@ -206,6 +215,42 @@ class DecisionStoreTests(unittest.TestCase):
         reloaded = self.store.get_pattern(pattern.id)
         self.assertEqual(reloaded.status, PatternStatus.WATCH)
         self.assertEqual(reloaded.confidence, 0.91)
+
+    def test_updates_decision_outcome_and_persists_review_learning(self) -> None:
+        run = self.store.persist_run("workspace-1", "Should I double down?")
+        record = self.store.persist_decision(
+            "workspace-1",
+            decision_run_id=run.id,
+            title="Double down on onboarding",
+            decision_summary="Ignore side paths and focus on onboarding",
+            chosen_option="Onboarding",
+            rejected_options=["New feature"],
+            why="Best signal",
+            risks="Could be noise",
+            expected_signals=["activation up"],
+        )
+
+        self.current_time = self.current_time + timedelta(days=14)
+        updated_record = self.store.update_record_outcome(
+            record.id,
+            outcome_status=DecisionOutcomeStatus.INVALIDATED,
+            outcome_summary="Активация не выросла, фокус не подтвердился.",
+            needs_follow_up=True,
+        )
+
+        self.assertEqual(updated_record.outcome_status, DecisionOutcomeStatus.INVALIDATED)
+        self.assertEqual(updated_record.outcome_summary, "Активация не выросла, фокус не подтвердился.")
+        self.assertEqual(updated_record.last_reviewed_at, self.current_time)
+        self.assertTrue(updated_record.needs_follow_up)
+
+        self.store.close()
+        self.store = DecisionStore(self.db_path, clock=self.clock)
+
+        reloaded = self.store.get_record(record.id)
+        self.assertEqual(reloaded.outcome_status, DecisionOutcomeStatus.INVALIDATED)
+        self.assertEqual(reloaded.outcome_summary, "Активация не выросла, фокус не подтвердился.")
+        self.assertEqual(reloaded.last_reviewed_at, self.current_time)
+        self.assertTrue(reloaded.needs_follow_up)
 
 
 if __name__ == "__main__":

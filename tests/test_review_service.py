@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from d_brain.services.decision_models import DecisionOutcomeStatus
 from d_brain.services.decision_store import DecisionStore
 from d_brain.services.review_service import ReviewService, ReviewServiceError
 
@@ -64,9 +65,25 @@ class ReviewServiceTests(unittest.TestCase):
         rendered = self.service.complete_review(42, review_id, "Активации выросли, фокус подтвердился")
 
         self.assertIn("Review закрыт", rendered)
+        self.assertIn("confirmed", rendered)
         updated = self.store.get_review(review_id)
         self.assertEqual(updated.status.value, "completed")
         self.assertEqual(updated.actual_outcome, "Активации выросли, фокус подтвердился")
+        record = self.store.get_record(updated.decision_record_id)
+        self.assertEqual(record.outcome_status, DecisionOutcomeStatus.CONFIRMED)
+        self.assertEqual(record.outcome_summary, "Активации выросли, фокус подтвердился")
+        self.assertFalse(record.needs_follow_up)
+
+    def test_complete_review_marks_invalidated_decision_for_follow_up(self) -> None:
+        review_id = self._seed_due_review()
+
+        rendered = self.service.complete_review(42, review_id, "Активации не выросли, решение не сработало")
+
+        self.assertIn("invalidated", rendered)
+        updated = self.store.get_review(review_id)
+        record = self.store.get_record(updated.decision_record_id)
+        self.assertEqual(record.outcome_status, DecisionOutcomeStatus.INVALIDATED)
+        self.assertTrue(record.needs_follow_up)
 
     def test_skip_review_updates_status(self) -> None:
         review_id = self._seed_due_review()

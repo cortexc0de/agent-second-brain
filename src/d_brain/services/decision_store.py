@@ -11,6 +11,7 @@ from typing import Callable, Iterable
 
 from d_brain.services.decision_models import (
     DecisionRecord,
+    DecisionOutcomeStatus,
     DecisionRun,
     DecisionRunStatus,
     PatternRecord,
@@ -79,6 +80,10 @@ class DecisionStore:
                     time_horizon_days INTEGER NOT NULL,
                     review_date TEXT NOT NULL,
                     confidence REAL NOT NULL,
+                    outcome_status TEXT NOT NULL DEFAULT 'unknown',
+                    outcome_summary TEXT,
+                    last_reviewed_at TEXT,
+                    needs_follow_up INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -121,6 +126,22 @@ class DecisionStore:
                     ON pattern_records(workspace_id, id);
                 """
             )
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(decision_records)").fetchall()
+        }
+        migrations = {
+            "outcome_status": "ALTER TABLE decision_records ADD COLUMN outcome_status TEXT NOT NULL DEFAULT 'unknown'",
+            "outcome_summary": "ALTER TABLE decision_records ADD COLUMN outcome_summary TEXT",
+            "last_reviewed_at": "ALTER TABLE decision_records ADD COLUMN last_reviewed_at TEXT",
+            "needs_follow_up": "ALTER TABLE decision_records ADD COLUMN needs_follow_up INTEGER NOT NULL DEFAULT 0",
+        }
+        with self._conn:
+            for column, statement in migrations.items():
+                if column not in columns:
+                    self._conn.execute(statement)
 
     def _now(self) -> datetime:
         value = self._clock()
@@ -366,9 +387,13 @@ class DecisionStore:
                     time_horizon_days,
                     review_date,
                     confidence,
+                    outcome_status,
+                    outcome_summary,
+                    last_reviewed_at,
+                    needs_follow_up,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     workspace_id,
@@ -384,6 +409,10 @@ class DecisionStore:
                     time_horizon_days,
                     self._serialize_datetime(review_date),
                     confidence,
+                    DecisionOutcomeStatus.UNKNOWN.value,
+                    None,
+                    None,
+                    0,
                     self._serialize_datetime(now),
                     self._serialize_datetime(now),
                 ),
@@ -543,6 +572,39 @@ class DecisionStore:
             )
         return self.get_review(review_id)
 
+    def update_record_outcome(
+        self,
+        record_id: int,
+        *,
+        outcome_status: DecisionOutcomeStatus,
+        outcome_summary: str,
+        needs_follow_up: bool,
+        last_reviewed_at: datetime | None = None,
+    ) -> DecisionRecord:
+        reviewed_at = last_reviewed_at or self._now()
+        record = self.get_record(record_id)
+        with self._conn:
+            self._conn.execute(
+                """
+                UPDATE decision_records
+                SET outcome_status = ?,
+                    outcome_summary = ?,
+                    last_reviewed_at = ?,
+                    needs_follow_up = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    outcome_status.value,
+                    outcome_summary.strip() or record.outcome_summary,
+                    self._serialize_datetime(reviewed_at),
+                    1 if needs_follow_up else 0,
+                    self._serialize_datetime(reviewed_at),
+                    record_id,
+                ),
+            )
+        return self.get_record(record_id)
+
     def persist_pattern(
         self,
         workspace_id_or_user_id: str | int,
@@ -678,6 +740,14 @@ class DecisionStore:
             confidence=row["confidence"],
             created_at=DecisionStore._parse_datetime(row["created_at"]),
             updated_at=DecisionStore._parse_datetime(row["updated_at"]),
+            outcome_status=DecisionOutcomeStatus(row["outcome_status"] or DecisionOutcomeStatus.UNKNOWN.value),
+            outcome_summary=row["outcome_summary"],
+            last_reviewed_at=(
+                DecisionStore._parse_datetime(row["last_reviewed_at"])
+                if row["last_reviewed_at"] is not None
+                else None
+            ),
+            needs_follow_up=bool(row["needs_follow_up"]),
         )
 
     @staticmethod
