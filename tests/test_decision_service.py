@@ -643,6 +643,7 @@ class DecisionServiceTests(unittest.TestCase):
                 rendered = service.render_recent_decisions(42, limit=2)
 
                 self.assertIn("ещё 1 решение вне среза", rendered)
+                self.assertIn("/decisions [limit]", rendered)
                 self.assertNotIn("Решение 1", rendered)
 
     def test_render_recent_decisions_omits_hidden_count_footer_when_not_truncated(self) -> None:

@@ -185,7 +185,10 @@ class DecisionService:
             noun = "решения"
         else:
             noun = "решений"
-        return f"<i>ещё {hidden_count} {noun} вне среза</i>"
+        return (
+            f"<i>ещё {hidden_count} {noun} вне среза — "
+            f"используй <code>/decisions [limit]</code></i>"
+        )
 
     @staticmethod
     def _render_outcome_label(record: Any) -> str:
