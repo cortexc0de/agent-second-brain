@@ -10,6 +10,8 @@ from d_brain.config import get_settings
 from d_brain.services.review_service import ReviewService, ReviewServiceError
 
 router = Router(name="review")
+DEFAULT_REVIEW_LIMIT = 3
+MAX_REVIEW_LIMIT = 20
 
 
 def _build_review_service() -> ReviewService:
@@ -26,14 +28,28 @@ async def _require_user_id(message: Message) -> int | None:
 
 
 @router.message(Command("review"))
-async def cmd_review(message: Message) -> None:
+async def cmd_review(message: Message, command: CommandObject | None = None) -> None:
     """Show due reviews for the current user."""
     user_id = await _require_user_id(message)
     if user_id is None:
         return
+
+    limit = DEFAULT_REVIEW_LIMIT
+    if command and command.args:
+        raw_limit = command.args.strip()
+        if not raw_limit.isdigit() or int(raw_limit) <= 0:
+            await message.answer(
+                "🔁 <b>Формат:</b> <code>/review [limit]</code>\n\n"
+                "Примеры:\n"
+                "<code>/review</code>\n"
+                "<code>/review 5</code>"
+            )
+            return
+        limit = min(int(raw_limit), MAX_REVIEW_LIMIT)
+
     service = _build_review_service()
     try:
-        result = service.render_review_overview(user_id)
+        result = service.render_review_overview(user_id, limit=limit)
     except ReviewServiceError as exc:
         await message.answer(f"❌ <b>Ошибка:</b> {exc}")
         return

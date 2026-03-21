@@ -252,6 +252,7 @@ class ReviewServiceTests(unittest.TestCase):
 
         self.assertIn("<b>Ещё в очереди:</b>", rendered)
         self.assertIn("и ещё 1", rendered)
+        self.assertIn("/review [limit]", rendered)
 
     def test_render_review_overview_keeps_primary_due_review_actions_intact_with_queue_present(
         self,
@@ -263,6 +264,49 @@ class ReviewServiceTests(unittest.TestCase):
 
         self.assertIn(f"/review_done {first_review_id} что получилось", rendered)
         self.assertIn(f"/review_skip {first_review_id}", rendered)
+
+    def test_render_review_overview_respects_due_review_limit(self) -> None:
+        first_review_id = self._seed_due_review(title="Focus on onboarding")
+        second_review_id = self._seed_due_review(
+            title="Cut side experiments",
+            due_at=self.current_time - timedelta(hours=12),
+        )
+        third_review_id = self._seed_due_review(
+            title="Talk to five users",
+            due_at=self.current_time - timedelta(hours=6),
+        )
+
+        rendered = self.service.render_review_overview(42, limit=2)
+
+        self.assertIn(f"<code>{first_review_id}</code>", rendered)
+        self.assertIn(f"<code>{second_review_id}</code>", rendered)
+        self.assertIn("Cut side experiments", rendered)
+        self.assertIn(f"<code>{third_review_id}</code>", rendered)
+        self.assertIn("Talk to five users", rendered)
+        self.assertNotIn("и ещё", rendered)
+
+    def test_render_review_overview_respects_queue_preview_limit(self) -> None:
+        self._seed_due_review(title="Focus on onboarding")
+        second_review_id = self._seed_due_review(
+            title="Cut side experiments",
+            due_at=self.current_time - timedelta(hours=12),
+        )
+        third_review_id = self._seed_due_review(
+            title="Talk to five users",
+            due_at=self.current_time - timedelta(hours=6),
+        )
+        fourth_review_id = self._seed_due_review(
+            title="Narrow ICP",
+            due_at=self.current_time - timedelta(hours=3),
+        )
+
+        rendered = self.service.render_review_overview(42, limit=1)
+
+        self.assertIn(f"<code>{second_review_id}</code>", rendered)
+        self.assertNotIn(f"<code>{third_review_id}</code>", rendered)
+        self.assertNotIn(f"<code>{fourth_review_id}</code>", rendered)
+        self.assertIn("и ещё 2", rendered)
+        self.assertIn("/review [limit]", rendered)
 
     def test_complete_review_updates_status_and_outcome(self) -> None:
         review_id = self._seed_due_review()

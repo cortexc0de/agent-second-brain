@@ -404,8 +404,64 @@ class ReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(review, "_build_review_service", return_value=service):
             await review.cmd_review(message)
 
-        service.render_review_overview.assert_called_once_with(42)
+        service.render_review_overview.assert_called_once_with(42, limit=3)
         message.answer.assert_awaited_once_with("overview")
+
+    async def test_cmd_review_accepts_numeric_limit(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7")
+        service = MagicMock()
+        service.render_review_overview.return_value = "overview-7"
+
+        with patch.object(review, "_build_review_service", return_value=service):
+            await review.cmd_review(message, command)
+
+        service.render_review_overview.assert_called_once_with(42, limit=7)
+        message.answer.assert_awaited_once_with("overview-7")
+
+    async def test_cmd_review_rejects_invalid_limit(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="abc")
+
+        await review.cmd_review(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("/review [limit]", reply_text)
+
+    async def test_cmd_review_rejects_zero_limit(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="0")
+
+        await review.cmd_review(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("/review [limit]", reply_text)
+
+    async def test_cmd_review_clamps_large_limit(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="50")
+        service = MagicMock()
+        service.render_review_overview.return_value = "overview-20"
+
+        with patch.object(review, "_build_review_service", return_value=service):
+            await review.cmd_review(message, command)
+
+        service.render_review_overview.assert_called_once_with(42, limit=20)
+        message.answer.assert_awaited_once_with("overview-20")
 
     async def test_cmd_review_handles_service_error(self) -> None:
         message = SimpleNamespace(

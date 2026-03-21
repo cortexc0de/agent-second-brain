@@ -161,10 +161,12 @@ class ReviewService:
 
         hidden_count = len(queued_reviews) - len(preview_reviews)
         if hidden_count > 0:
-            parts.append(f"<i>и ещё {hidden_count}</i>")
+            parts.append(
+                f"<i>и ещё {hidden_count} — используй <code>/review [limit]</code></i>"
+            )
         return parts
 
-    def list_due_reviews(self, user_id: int, limit: int = 5) -> list[ReviewRecord]:
+    def list_due_reviews(self, user_id: int, limit: int | None = 5) -> list[ReviewRecord]:
         """List due reviews for a user and mark scheduled ones as due."""
         store, created_store = self._open_store()
         try:
@@ -175,16 +177,18 @@ class ReviewService:
                     if review.status == ReviewStatus.SCHEDULED:
                         review = store.update_review(review.id, ReviewStatus.DUE)
                     due_reviews.append(review)
+            if limit is None:
+                return due_reviews
             return due_reviews[:limit]
         finally:
             if created_store and isinstance(store, DecisionStore):
                 store.close()
 
-    def render_review_overview(self, user_id: int) -> str:
+    def render_review_overview(self, user_id: int, limit: int = 3) -> str:
         """Render an overview of due reviews and recent review history."""
         store, created_store = self._open_store()
         try:
-            due_reviews = self.list_due_reviews(user_id)
+            due_reviews = self.list_due_reviews(user_id, limit=None)
             recent_reviews = store.list_reviews(str(user_id), limit=5)
 
             if due_reviews:
@@ -207,7 +211,13 @@ class ReviewService:
                     f"<b>Завершить:</b> <code>/review_done {first.id} что получилось</code>",
                     f"<b>Пропустить:</b> <code>/review_skip {first.id}</code>",
                 ]
-                parts.extend(self._render_due_review_queue_preview(store, due_reviews[1:]))
+                parts.extend(
+                    self._render_due_review_queue_preview(
+                        store,
+                        due_reviews[1:],
+                        preview_limit=limit,
+                    )
+                )
                 return "\n".join(parts)
 
             parts = ["✅ <b>Сейчас нет due reviews</b>"]
