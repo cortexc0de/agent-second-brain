@@ -38,6 +38,10 @@ class Settings(BaseSettings):
         default=20,
         description="Maximum due reviews delivered per polling cycle",
     )
+    due_review_claim_lease_seconds: int = Field(
+        default=300,
+        description="Lease duration for proactive due-review delivery claims",
+    )
 
     @property
     def daily_path(self) -> Path:

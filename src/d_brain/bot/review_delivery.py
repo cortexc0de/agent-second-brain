@@ -35,6 +35,10 @@ async def deliver_due_reviews(
         except asyncio.CancelledError:
             raise
         except Exception:
+            try:
+                worker.release_prompt_delivery(prompt.review_id)
+            except Exception:
+                logger.exception("Due review claim release failed for review %s", prompt.review_id)
             logger.exception("Due review delivery failed for review %s", prompt.review_id)
         else:
             sent_count += 1

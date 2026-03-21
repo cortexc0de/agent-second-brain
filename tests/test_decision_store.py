@@ -208,6 +208,85 @@ class DecisionStoreTests(unittest.TestCase):
         loaded = self.store.get_review(review.id)
         self.assertEqual(loaded.notified_at, self.current_time)
 
+    def test_claim_due_review_notifications_prevents_other_claimer_until_lease_expires(self) -> None:
+        record = self.store.persist_decision(
+            "workspace-1",
+            decision_run_id=self.store.persist_run("workspace-1", "What next?").id,
+            title="Focus the team",
+            decision_summary="One priority.",
+            chosen_option="Initiative A",
+            rejected_options=["Initiative B"],
+            why="Best evidence.",
+            risks="Misses other options.",
+            expected_signals=["more activations"],
+            confidence=0.8,
+        )
+        review = self.store.create_review(
+            workspace_id="workspace-1",
+            decision_record_id=record.id,
+            due_at=self.current_time - timedelta(days=1),
+            expected_outcome="More activations",
+        )
+
+        first_claim = self.store.claim_due_review_notifications(
+            claimer_id="worker-a",
+            when=self.current_time,
+            lease_expires_at=self.current_time + timedelta(minutes=5),
+            limit=10,
+        )
+        second_claim = self.store.claim_due_review_notifications(
+            claimer_id="worker-b",
+            when=self.current_time,
+            lease_expires_at=self.current_time + timedelta(minutes=5),
+            limit=10,
+        )
+
+        self.assertEqual([item.id for item in first_claim], [review.id])
+        self.assertEqual(second_claim, [])
+        loaded = self.store.get_review(review.id)
+        self.assertEqual(loaded.claimed_by, "worker-a")
+        self.assertEqual(loaded.claim_expires_at, self.current_time + timedelta(minutes=5))
+
+    def test_claim_due_review_notifications_reclaims_expired_lease(self) -> None:
+        record = self.store.persist_decision(
+            "workspace-1",
+            decision_run_id=self.store.persist_run("workspace-1", "What next?").id,
+            title="Focus the team",
+            decision_summary="One priority.",
+            chosen_option="Initiative A",
+            rejected_options=["Initiative B"],
+            why="Best evidence.",
+            risks="Misses other options.",
+            expected_signals=["more activations"],
+            confidence=0.8,
+        )
+        review = self.store.create_review(
+            workspace_id="workspace-1",
+            decision_record_id=record.id,
+            due_at=self.current_time - timedelta(days=1),
+            expected_outcome="More activations",
+        )
+
+        first_claim = self.store.claim_due_review_notifications(
+            claimer_id="worker-a",
+            when=self.current_time,
+            lease_expires_at=self.current_time + timedelta(minutes=5),
+            limit=10,
+        )
+        self.current_time = self.current_time + timedelta(minutes=6)
+        second_claim = self.store.claim_due_review_notifications(
+            claimer_id="worker-b",
+            when=self.current_time,
+            lease_expires_at=self.current_time + timedelta(minutes=5),
+            limit=10,
+        )
+
+        self.assertEqual([item.id for item in first_claim], [review.id])
+        self.assertEqual([item.id for item in second_claim], [review.id])
+        loaded = self.store.get_review(review.id)
+        self.assertEqual(loaded.claimed_by, "worker-b")
+        self.assertEqual(loaded.claim_expires_at, self.current_time + timedelta(minutes=5))
+
     def test_persists_and_lists_patterns(self) -> None:
         pattern = self.store.persist_pattern(
             "workspace-1",

@@ -103,7 +103,9 @@ class DecisionStore:
                     agent_assessment TEXT,
                     created_at TEXT NOT NULL,
                     completed_at TEXT,
-                    notified_at TEXT
+                    notified_at TEXT,
+                    claimed_by TEXT,
+                    claim_expires_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS pattern_records (
@@ -152,9 +154,15 @@ class DecisionStore:
         review_columns = {
             row["name"] for row in self._conn.execute("PRAGMA table_info(review_records)").fetchall()
         }
-        if "notified_at" not in review_columns:
-            with self._conn:
-                self._conn.execute("ALTER TABLE review_records ADD COLUMN notified_at TEXT")
+        review_migrations = {
+            "notified_at": "ALTER TABLE review_records ADD COLUMN notified_at TEXT",
+            "claimed_by": "ALTER TABLE review_records ADD COLUMN claimed_by TEXT",
+            "claim_expires_at": "ALTER TABLE review_records ADD COLUMN claim_expires_at TEXT",
+        }
+        with self._conn:
+            for column, statement in review_migrations.items():
+                if column not in review_columns:
+                    self._conn.execute(statement)
 
     def _now(self) -> datetime:
         value = self._clock()
@@ -517,8 +525,10 @@ class DecisionStore:
                     agent_assessment,
                     created_at,
                     completed_at,
-                    notified_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    notified_at,
+                    claimed_by,
+                    claim_expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     workspace_id,
@@ -530,6 +540,8 @@ class DecisionStore:
                     user_response,
                     agent_assessment,
                     self._serialize_datetime(now),
+                    None,
+                    None,
                     None,
                     None,
                 ),
@@ -596,11 +608,13 @@ class DecisionStore:
             WHERE status IN (?, ?)
               AND due_at <= ?
               AND notified_at IS NULL
+              AND (claim_expires_at IS NULL OR claim_expires_at <= ?)
             ORDER BY due_at, id
         """
         params: list[object] = [
             self._status_value(ReviewStatus.SCHEDULED),
             self._status_value(ReviewStatus.DUE),
+            self._serialize_datetime(threshold),
             self._serialize_datetime(threshold),
         ]
         if limit is not None:
@@ -608,6 +622,57 @@ class DecisionStore:
             params.append(limit)
         rows = self._conn.execute(query, params).fetchall()
         return [self._row_to_review(row) for row in rows]
+
+    def claim_due_review_notifications(
+        self,
+        *,
+        claimer_id: str,
+        when: datetime | None = None,
+        lease_expires_at: datetime | None = None,
+        limit: int = 20,
+    ) -> list[ReviewRecord]:
+        threshold = when or self._now()
+        lease_until = lease_expires_at or (threshold + timedelta(minutes=5))
+        claimed_ids: list[int] = []
+        with self.transaction():
+            candidate_rows = self._conn.execute(
+                """
+                SELECT id FROM review_records
+                WHERE status IN (?, ?)
+                  AND due_at <= ?
+                  AND notified_at IS NULL
+                  AND (claim_expires_at IS NULL OR claim_expires_at <= ?)
+                ORDER BY due_at, id
+                LIMIT ?
+                """,
+                (
+                    self._status_value(ReviewStatus.SCHEDULED),
+                    self._status_value(ReviewStatus.DUE),
+                    self._serialize_datetime(threshold),
+                    self._serialize_datetime(threshold),
+                    limit,
+                ),
+            ).fetchall()
+            for row in candidate_rows:
+                cursor = self._conn.execute(
+                    """
+                    UPDATE review_records
+                    SET claimed_by = ?,
+                        claim_expires_at = ?
+                    WHERE id = ?
+                      AND notified_at IS NULL
+                      AND (claim_expires_at IS NULL OR claim_expires_at <= ?)
+                    """,
+                    (
+                        claimer_id,
+                        self._serialize_datetime(lease_until),
+                        row["id"],
+                        self._serialize_datetime(threshold),
+                    ),
+                )
+                if cursor.rowcount == 1:
+                    claimed_ids.append(int(row["id"]))
+        return [self.get_review(review_id) for review_id in claimed_ids]
 
     def update_review(
         self,
@@ -649,22 +714,55 @@ class DecisionStore:
         review_id: int,
         *,
         notified_at: datetime | None = None,
+        claimer_id: str | None = None,
     ) -> ReviewRecord:
         timestamp = notified_at or self._now()
         with self._write():
-            self._conn.execute(
+            cursor = self._conn.execute(
                 """
                 UPDATE review_records
                 SET status = ?,
-                    notified_at = ?
+                    notified_at = ?,
+                    claimed_by = NULL,
+                    claim_expires_at = NULL
                 WHERE id = ?
+                  AND (? IS NULL OR claimed_by = ?)
                 """,
                 (
                     self._status_value(ReviewStatus.DUE),
                     self._serialize_datetime(timestamp),
                     review_id,
+                    claimer_id,
+                    claimer_id,
                 ),
             )
+        if cursor.rowcount != 1:
+            raise DecisionStoreError(f"Review record {review_id} is not claimed by {claimer_id}")
+        return self.get_review(review_id)
+
+    def release_review_claim(
+        self,
+        review_id: int,
+        *,
+        claimer_id: str | None = None,
+    ) -> ReviewRecord:
+        with self._write():
+            cursor = self._conn.execute(
+                """
+                UPDATE review_records
+                SET claimed_by = NULL,
+                    claim_expires_at = NULL
+                WHERE id = ?
+                  AND (? IS NULL OR claimed_by = ?)
+                """,
+                (
+                    review_id,
+                    claimer_id,
+                    claimer_id,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise DecisionStoreError(f"Review record {review_id} is not claimed by {claimer_id}")
         return self.get_review(review_id)
 
     def update_record_outcome(
@@ -935,6 +1033,12 @@ class DecisionStore:
             notified_at=(
                 DecisionStore._parse_datetime(row["notified_at"])
                 if row["notified_at"] is not None
+                else None
+            ),
+            claimed_by=row["claimed_by"],
+            claim_expires_at=(
+                DecisionStore._parse_datetime(row["claim_expires_at"])
+                if row["claim_expires_at"] is not None
                 else None
             ),
         )

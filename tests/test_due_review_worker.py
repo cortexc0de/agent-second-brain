@@ -15,7 +15,7 @@ class DueReviewWorkerTests(unittest.TestCase):
         self.db_path = Path(self.tmpdir.name) / "decision-store.sqlite3"
         self.current_time = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
         self.store = DecisionStore(self.db_path, clock=self.clock)
-        self.worker = DueReviewWorker(store=self.store, clock=self.clock)
+        self.worker = DueReviewWorker(store=self.store, clock=self.clock, worker_id="worker-a", lease_seconds=300)
 
     def tearDown(self) -> None:
         self.store.close()
@@ -61,15 +61,27 @@ class DueReviewWorkerTests(unittest.TestCase):
         self.assertEqual(self.store.get_review(second_review_id).status.value, "scheduled")
         self.assertIsNone(self.store.get_review(first_review_id).notified_at)
 
-    def test_collect_due_prompts_retries_unacknowledged_due_review_on_next_poll(self) -> None:
+    def test_collect_due_prompts_keeps_claimed_review_hidden_until_release_or_expiry(self) -> None:
         review_id = self._seed_review("42", due_at=self.current_time - timedelta(days=1))
 
         first_batch = self.worker.collect_due_prompts()
         second_batch = self.worker.collect_due_prompts()
 
         self.assertEqual(len(first_batch), 1)
-        self.assertEqual(len(second_batch), 1)
+        self.assertEqual(second_batch, [])
         self.assertEqual(first_batch[0].review_id, review_id)
+        loaded = self.store.get_review(review_id)
+        self.assertEqual(loaded.claimed_by, "worker-a")
+
+    def test_release_prompt_delivery_claim_makes_review_retryable_immediately(self) -> None:
+        review_id = self._seed_review("42", due_at=self.current_time - timedelta(days=1))
+
+        first_batch = self.worker.collect_due_prompts()
+        self.worker.release_prompt_delivery(review_id)
+        second_batch = self.worker.collect_due_prompts()
+
+        self.assertEqual(len(first_batch), 1)
+        self.assertEqual(len(second_batch), 1)
         self.assertEqual(second_batch[0].review_id, review_id)
 
     def test_collect_due_prompts_skips_already_acknowledged_review(self) -> None:
@@ -83,6 +95,29 @@ class DueReviewWorkerTests(unittest.TestCase):
         self.assertEqual(next_batch, [])
         self.assertEqual(self.store.get_review(review_id).status.value, "due")
         self.assertEqual(self.store.get_review(review_id).notified_at, self.current_time)
+
+    def test_collect_due_prompts_claims_reviews_for_this_worker(self) -> None:
+        review_id = self._seed_review("42", due_at=self.current_time - timedelta(days=1))
+
+        prompts = self.worker.collect_due_prompts()
+
+        self.assertEqual(len(prompts), 1)
+        loaded = self.store.get_review(review_id)
+        self.assertEqual(loaded.claimed_by, "worker-a")
+        self.assertEqual(loaded.claim_expires_at, self.current_time + timedelta(minutes=5))
+
+    def test_collect_due_prompts_does_not_pick_review_claimed_by_other_worker_until_lease_expires(self) -> None:
+        review_id = self._seed_review("42", due_at=self.current_time - timedelta(days=1))
+        other_worker = DueReviewWorker(store=self.store, clock=self.clock, worker_id="worker-b", lease_seconds=300)
+
+        first_batch = self.worker.collect_due_prompts()
+        second_batch = other_worker.collect_due_prompts()
+        self.current_time = self.current_time + timedelta(minutes=6)
+        third_batch = other_worker.collect_due_prompts()
+
+        self.assertEqual([item.review_id for item in first_batch], [review_id])
+        self.assertEqual(second_batch, [])
+        self.assertEqual([item.review_id for item in third_batch], [review_id])
 
     def test_collect_due_prompts_respects_limit(self) -> None:
         self._seed_review("42", due_at=self.current_time - timedelta(days=3))

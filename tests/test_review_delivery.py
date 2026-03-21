@@ -150,6 +150,47 @@ class ReviewDeliveryTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 store.close()
 
+    async def test_deliver_due_reviews_releases_failed_claim_for_immediate_retry(self) -> None:
+        current_time = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+
+        def clock() -> datetime:
+            return current_time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            store = DecisionStore(db_path, clock=clock)
+            try:
+                run = store.persist_run("42", "What should I focus on next?")
+                record = store.persist_decision(
+                    "42",
+                    decision_run_id=run.id,
+                    title="Focus on onboarding",
+                    decision_summary="Freeze side quests.",
+                    chosen_option="Onboarding",
+                    rejected_options=["New feature"],
+                    why="Strongest signal.",
+                    risks="Sample too small.",
+                    expected_signals=["more activations"],
+                )
+                store.create_review(
+                    workspace_id="42",
+                    decision_record_id=record.id,
+                    due_at=current_time - timedelta(days=1),
+                    expected_outcome="more activations",
+                )
+                worker = DueReviewWorker(store=store, clock=clock, worker_id="worker-a", lease_seconds=300)
+                bot = SimpleNamespace(send_message=AsyncMock(side_effect=[RuntimeError("boom"), None]))
+
+                with patch.object(review_delivery, "logger"):
+                    first_sent = await review_delivery.deliver_due_reviews(bot, worker=worker)
+                    second_sent = await review_delivery.deliver_due_reviews(bot, worker=worker)
+
+                self.assertEqual(first_sent, 0)
+                self.assertEqual(second_sent, 1)
+                self.assertEqual(bot.send_message.await_count, 2)
+            finally:
+                store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -101,6 +101,8 @@ class ReviewRecord:
     created_at: datetime
     completed_at: datetime | None
     notified_at: datetime | None = None
+    claimed_by: str | None = None
+    claim_expires_at: datetime | None = None
 
 
 @dataclass(slots=True)

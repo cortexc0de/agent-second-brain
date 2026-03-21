@@ -90,7 +90,10 @@ async def run_bot(settings: Settings) -> None:
     """Run the bot with polling."""
     bot = create_bot(settings)
     dp = create_dispatcher()
-    worker = DueReviewWorker(store_path=settings.vault_path / ".decision-store.sqlite3")
+    worker = DueReviewWorker(
+        store_path=settings.vault_path / ".decision-store.sqlite3",
+        lease_seconds=settings.due_review_claim_lease_seconds,
+    )
 
     # Always add auth middleware for security (it handles allow_all_users internally)
     dp.update.middleware(create_auth_middleware(settings))

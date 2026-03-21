@@ -162,6 +162,7 @@ class BotMainTests(unittest.TestCase):
                 vault_path=Path("/tmp"),
                 due_review_poll_interval_seconds=15,
                 due_review_batch_limit=4,
+                due_review_claim_lease_seconds=300,
             )
             cancelled = asyncio.Event()
 
