@@ -25,14 +25,22 @@ class ReviewServiceTests(unittest.TestCase):
     def clock(self) -> datetime:
         return self.current_time
 
-    def _seed_due_review(self, workspace_id: str = "42") -> int:
+    def _seed_due_review(
+        self,
+        workspace_id: str = "42",
+        *,
+        title: str = "Focus on onboarding",
+        chosen_option: str = "Onboarding",
+        expected_outcome: str = "more activations",
+        due_at: datetime | None = None,
+    ) -> int:
         run = self.store.persist_run(workspace_id, "What should I focus on?")
         record = self.store.persist_decision(
             workspace_id,
             decision_run_id=run.id,
-            title="Focus on onboarding",
+            title=title,
             decision_summary="Freeze experiments and focus on onboarding.",
-            chosen_option="Onboarding",
+            chosen_option=chosen_option,
             rejected_options=["New feature"],
             why="Highest evidence.",
             risks="Sample too small.",
@@ -42,8 +50,8 @@ class ReviewServiceTests(unittest.TestCase):
         review = self.store.create_review(
             workspace_id=workspace_id,
             decision_record_id=record.id,
-            due_at=self.current_time - timedelta(days=1),
-            expected_outcome="more activations",
+            due_at=due_at or (self.current_time - timedelta(days=1)),
+            expected_outcome=expected_outcome,
         )
         self.store.persist_pattern(
             workspace_id,
@@ -197,6 +205,64 @@ class ReviewServiceTests(unittest.TestCase):
         self.assertIn("Следующий шаг", rendered)
         self.assertIn("trace так и не появился", rendered)
         self.assertIn("scheduler", rendered)
+
+    def test_render_review_overview_shows_compact_queue_for_additional_due_reviews(self) -> None:
+        first_review_id = self._seed_due_review(title="Focus on onboarding")
+        second_review_id = self._seed_due_review(
+            title="Cut side experiments",
+            chosen_option="Pause experiments",
+            expected_outcome="fewer distractions",
+            due_at=self.current_time - timedelta(hours=12),
+        )
+        third_review_id = self._seed_due_review(
+            title="Talk to five users",
+            chosen_option="Customer interviews",
+            expected_outcome="clearer signals",
+            due_at=self.current_time - timedelta(hours=6),
+        )
+
+        rendered = self.service.render_review_overview(42)
+
+        self.assertIn(f"<code>{first_review_id}</code>", rendered)
+        self.assertIn("<b>Ещё в очереди:</b>", rendered)
+        self.assertIn(f"<code>{second_review_id}</code>", rendered)
+        self.assertIn("Cut side experiments", rendered)
+        self.assertIn(f"/review_trace {second_review_id}", rendered)
+        self.assertIn(f"/review_done {second_review_id}", rendered)
+        self.assertIn(f"<code>{third_review_id}</code>", rendered)
+        self.assertIn("Talk to five users", rendered)
+
+    def test_render_review_overview_omits_queue_section_when_only_one_due_review(self) -> None:
+        self._seed_due_review()
+
+        rendered = self.service.render_review_overview(42)
+
+        self.assertNotIn("<b>Ещё в очереди:</b>", rendered)
+
+    def test_render_review_overview_shows_remaining_hidden_count_when_due_queue_exceeds_preview(
+        self,
+    ) -> None:
+        self._seed_due_review(title="Focus on onboarding")
+        self._seed_due_review(title="Cut side experiments", due_at=self.current_time - timedelta(hours=12))
+        self._seed_due_review(title="Talk to five users", due_at=self.current_time - timedelta(hours=6))
+        self._seed_due_review(title="Narrow ICP", due_at=self.current_time - timedelta(hours=3))
+        self._seed_due_review(title="Fix activation", due_at=self.current_time - timedelta(hours=2))
+
+        rendered = self.service.render_review_overview(42)
+
+        self.assertIn("<b>Ещё в очереди:</b>", rendered)
+        self.assertIn("и ещё 1", rendered)
+
+    def test_render_review_overview_keeps_primary_due_review_actions_intact_with_queue_present(
+        self,
+    ) -> None:
+        first_review_id = self._seed_due_review(title="Focus on onboarding")
+        self._seed_due_review(title="Cut side experiments", due_at=self.current_time - timedelta(hours=12))
+
+        rendered = self.service.render_review_overview(42)
+
+        self.assertIn(f"/review_done {first_review_id} что получилось", rendered)
+        self.assertIn(f"/review_skip {first_review_id}", rendered)
 
     def test_complete_review_updates_status_and_outcome(self) -> None:
         review_id = self._seed_due_review()

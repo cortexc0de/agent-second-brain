@@ -137,6 +137,33 @@ class ReviewService:
             f"<b>Сбоев доставки:</b> {failed_attempts}",
         ]
 
+    @staticmethod
+    def _render_due_review_queue_preview(
+        store: Any,
+        queued_reviews: list[ReviewRecord],
+        *,
+        preview_limit: int = 3,
+    ) -> list[str]:
+        if not queued_reviews:
+            return []
+
+        preview_reviews = queued_reviews[:preview_limit]
+        parts = ["", "<b>Ещё в очереди:</b>"]
+        for review in preview_reviews:
+            record = store.get_record(review.decision_record_id)
+            parts.append(
+                "• "
+                f"<code>{review.id}</code> {html.escape(record.title)} "
+                f"до {html.escape(review.due_at.date().isoformat())} "
+                f"· <code>/review_trace {review.id}</code> "
+                f"· <code>/review_done {review.id} ...</code>"
+            )
+
+        hidden_count = len(queued_reviews) - len(preview_reviews)
+        if hidden_count > 0:
+            parts.append(f"<i>и ещё {hidden_count}</i>")
+        return parts
+
     def list_due_reviews(self, user_id: int, limit: int = 5) -> list[ReviewRecord]:
         """List due reviews for a user and mark scheduled ones as due."""
         store, created_store = self._open_store()
@@ -180,13 +207,7 @@ class ReviewService:
                     f"<b>Завершить:</b> <code>/review_done {first.id} что получилось</code>",
                     f"<b>Пропустить:</b> <code>/review_skip {first.id}</code>",
                 ]
-                if len(due_reviews) > 1:
-                    parts.extend(
-                        [
-                            "",
-                            f"<i>Ещё due reviews: {len(due_reviews) - 1}</i>",
-                        ]
-                    )
+                parts.extend(self._render_due_review_queue_preview(store, due_reviews[1:]))
                 return "\n".join(parts)
 
             parts = ["✅ <b>Сейчас нет due reviews</b>"]
