@@ -45,7 +45,7 @@ class DueReviewWorkerTests(unittest.TestCase):
         )
         return review.id
 
-    def test_collect_due_prompts_returns_sorted_due_reviews_and_marks_them_due(self) -> None:
+    def test_collect_due_prompts_returns_sorted_due_reviews_without_acknowledging_them(self) -> None:
         first_review_id = self._seed_review("42", due_at=self.current_time - timedelta(days=2))
         second_review_id = self._seed_review("84", due_at=self.current_time - timedelta(days=1))
         self._seed_review("168", due_at=self.current_time + timedelta(days=1))
@@ -57,17 +57,32 @@ class DueReviewWorkerTests(unittest.TestCase):
         self.assertIn("/review_done", prompts[0].message)
         self.assertIn("/review_skip", prompts[0].message)
 
-        self.assertEqual(self.store.get_review(first_review_id).status.value, "due")
-        self.assertEqual(self.store.get_review(second_review_id).status.value, "due")
+        self.assertEqual(self.store.get_review(first_review_id).status.value, "scheduled")
+        self.assertEqual(self.store.get_review(second_review_id).status.value, "scheduled")
+        self.assertIsNone(self.store.get_review(first_review_id).notified_at)
 
-    def test_collect_due_prompts_is_idempotent_after_first_pickup(self) -> None:
-        self._seed_review("42", due_at=self.current_time - timedelta(days=1))
+    def test_collect_due_prompts_retries_unacknowledged_due_review_on_next_poll(self) -> None:
+        review_id = self._seed_review("42", due_at=self.current_time - timedelta(days=1))
 
         first_batch = self.worker.collect_due_prompts()
         second_batch = self.worker.collect_due_prompts()
 
         self.assertEqual(len(first_batch), 1)
-        self.assertEqual(second_batch, [])
+        self.assertEqual(len(second_batch), 1)
+        self.assertEqual(first_batch[0].review_id, review_id)
+        self.assertEqual(second_batch[0].review_id, review_id)
+
+    def test_collect_due_prompts_skips_already_acknowledged_review(self) -> None:
+        review_id = self._seed_review("42", due_at=self.current_time - timedelta(days=1))
+
+        prompts = self.worker.collect_due_prompts()
+        self.worker.acknowledge_prompt_delivery(review_id)
+        next_batch = self.worker.collect_due_prompts()
+
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(next_batch, [])
+        self.assertEqual(self.store.get_review(review_id).status.value, "due")
+        self.assertEqual(self.store.get_review(review_id).notified_at, self.current_time)
 
     def test_collect_due_prompts_respects_limit(self) -> None:
         self._seed_review("42", due_at=self.current_time - timedelta(days=3))

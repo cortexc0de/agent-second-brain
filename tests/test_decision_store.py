@@ -93,6 +93,7 @@ class DecisionStoreTests(unittest.TestCase):
         self.current_time = self.current_time + timedelta(days=15)
         due_reviews = self.store.list_due_reviews(self.current_time)
         self.assertEqual([item.id for item in due_reviews], [review.id])
+        self.assertIsNone(due_reviews[0].notified_at)
 
         self.current_time = self.current_time + timedelta(minutes=10)
         completed_review = self.store.update_review(
@@ -169,6 +170,43 @@ class DecisionStoreTests(unittest.TestCase):
 
         self.assertEqual([item.id for item in due_reviews], [due_review.id])
         self.assertNotIn(future_review.id, [item.id for item in due_reviews])
+
+    def test_mark_review_notified_persists_and_hides_review_from_delivery_query(self) -> None:
+        record = self.store.persist_decision(
+            "workspace-1",
+            decision_run_id=self.store.persist_run(
+                "workspace-1",
+                "What should I review?",
+            ).id,
+            title="Focus the team",
+            decision_summary="Focus on one initiative.",
+            chosen_option="Initiative A",
+            rejected_options=["Initiative B"],
+            why="Best evidence.",
+            risks="Might miss other opportunities.",
+            expected_signals=["more activations"],
+            confidence=0.8,
+        )
+        review = self.store.create_review(
+            workspace_id="workspace-1",
+            decision_record_id=record.id,
+            due_at=self.current_time - timedelta(days=1),
+            expected_outcome="More activations",
+        )
+
+        pending = self.store.list_pending_review_notifications(self.current_time)
+        self.assertEqual([item.id for item in pending], [review.id])
+        self.assertIsNone(pending[0].notified_at)
+
+        self.current_time = self.current_time + timedelta(minutes=5)
+        updated = self.store.mark_review_notified(review.id)
+
+        self.assertEqual(updated.status, ReviewStatus.DUE)
+        self.assertEqual(updated.notified_at, self.current_time)
+        self.assertEqual(self.store.list_pending_review_notifications(self.current_time), [])
+
+        loaded = self.store.get_review(review.id)
+        self.assertEqual(loaded.notified_at, self.current_time)
 
     def test_persists_and_lists_patterns(self) -> None:
         pattern = self.store.persist_pattern(

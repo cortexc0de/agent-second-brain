@@ -100,6 +100,7 @@ class ReviewRecord:
     agent_assessment: str | None
     created_at: datetime
     completed_at: datetime | None
+    notified_at: datetime | None = None
 
 
 @dataclass(slots=True)

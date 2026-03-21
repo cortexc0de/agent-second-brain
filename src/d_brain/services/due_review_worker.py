@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from d_brain.services.decision_models import ReviewStatus
 from d_brain.services.decision_store import DecisionStore
 
 
@@ -24,7 +23,7 @@ class DueReviewPrompt:
 
 
 class DueReviewWorker:
-    """Collect due reviews and render ready-to-send prompts exactly once."""
+    """Collect due reviews and acknowledge proactive delivery explicitly."""
 
     def __init__(
         self,
@@ -51,24 +50,32 @@ class DueReviewWorker:
         return DecisionStore(self.store_path), True
 
     def collect_due_prompts(self, limit: int = 20) -> list[DueReviewPrompt]:
-        """Collect scheduled due reviews, mark them due, and render one-off prompts."""
+        """Collect due reviews that still need proactive delivery."""
         store, created_store = self._open_store()
         try:
-            reviews = store.list_due_reviews(self._now())[:limit]
+            reviews = store.list_pending_review_notifications(self._now(), limit=limit)
             prompts: list[DueReviewPrompt] = []
             for review in reviews:
-                updated = store.update_review(review.id, ReviewStatus.DUE)
-                record = store.get_record(updated.decision_record_id)
+                record = store.get_record(review.decision_record_id)
                 prompts.append(
                     DueReviewPrompt(
-                        workspace_id=updated.workspace_id,
-                        user_id=int(updated.workspace_id),
-                        review_id=updated.id,
+                        workspace_id=review.workspace_id,
+                        user_id=int(review.workspace_id),
+                        review_id=review.id,
                         decision_record_id=record.id,
-                        message=self._render_prompt(updated.id, record.title, record.chosen_option, updated.expected_outcome),
+                        message=self._render_prompt(review.id, record.title, record.chosen_option, review.expected_outcome),
                     )
                 )
             return prompts
+        finally:
+            if created_store and isinstance(store, DecisionStore):
+                store.close()
+
+    def acknowledge_prompt_delivery(self, review_id: int) -> None:
+        """Persist successful proactive delivery for a review prompt."""
+        store, created_store = self._open_store()
+        try:
+            store.mark_review_notified(review_id, notified_at=self._now())
         finally:
             if created_store and isinstance(store, DecisionStore):
                 store.close()

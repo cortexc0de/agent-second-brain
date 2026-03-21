@@ -31,6 +31,7 @@ async def deliver_due_reviews(
     for prompt in prompts:
         try:
             await bot.send_message(chat_id=prompt.user_id, text=prompt.message)
+            worker.acknowledge_prompt_delivery(prompt.review_id)
         except asyncio.CancelledError:
             raise
         except Exception:

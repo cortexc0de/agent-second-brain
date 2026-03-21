@@ -102,7 +102,8 @@ class DecisionStore:
                     user_response TEXT,
                     agent_assessment TEXT,
                     created_at TEXT NOT NULL,
-                    completed_at TEXT
+                    completed_at TEXT,
+                    notified_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS pattern_records (
@@ -148,6 +149,12 @@ class DecisionStore:
             for column, statement in migrations.items():
                 if column not in columns:
                     self._conn.execute(statement)
+        review_columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(review_records)").fetchall()
+        }
+        if "notified_at" not in review_columns:
+            with self._conn:
+                self._conn.execute("ALTER TABLE review_records ADD COLUMN notified_at TEXT")
 
     def _now(self) -> datetime:
         value = self._clock()
@@ -509,8 +516,9 @@ class DecisionStore:
                     user_response,
                     agent_assessment,
                     created_at,
-                    completed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    completed_at,
+                    notified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     workspace_id,
@@ -522,6 +530,7 @@ class DecisionStore:
                     user_response,
                     agent_assessment,
                     self._serialize_datetime(now),
+                    None,
                     None,
                 ),
             )
@@ -565,14 +574,39 @@ class DecisionStore:
         rows = self._conn.execute(
             """
             SELECT * FROM review_records
-            WHERE status = ? AND due_at <= ?
+            WHERE status IN (?, ?) AND due_at <= ?
             ORDER BY due_at, id
             """,
             (
                 self._status_value(ReviewStatus.SCHEDULED),
+                self._status_value(ReviewStatus.DUE),
                 self._serialize_datetime(threshold),
             ),
         ).fetchall()
+        return [self._row_to_review(row) for row in rows]
+
+    def list_pending_review_notifications(
+        self,
+        when: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[ReviewRecord]:
+        threshold = when or self._now()
+        query = """
+            SELECT * FROM review_records
+            WHERE status IN (?, ?)
+              AND due_at <= ?
+              AND notified_at IS NULL
+            ORDER BY due_at, id
+        """
+        params: list[object] = [
+            self._status_value(ReviewStatus.SCHEDULED),
+            self._status_value(ReviewStatus.DUE),
+            self._serialize_datetime(threshold),
+        ]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = self._conn.execute(query, params).fetchall()
         return [self._row_to_review(row) for row in rows]
 
     def update_review(
@@ -605,6 +639,29 @@ class DecisionStore:
                     user_response,
                     agent_assessment,
                     self._serialize_datetime(completed_at) if completed_at else None,
+                    review_id,
+                ),
+            )
+        return self.get_review(review_id)
+
+    def mark_review_notified(
+        self,
+        review_id: int,
+        *,
+        notified_at: datetime | None = None,
+    ) -> ReviewRecord:
+        timestamp = notified_at or self._now()
+        with self._write():
+            self._conn.execute(
+                """
+                UPDATE review_records
+                SET status = ?,
+                    notified_at = ?
+                WHERE id = ?
+                """,
+                (
+                    self._status_value(ReviewStatus.DUE),
+                    self._serialize_datetime(timestamp),
                     review_id,
                 ),
             )
@@ -873,6 +930,11 @@ class DecisionStore:
             completed_at=(
                 DecisionStore._parse_datetime(row["completed_at"])
                 if row["completed_at"] is not None
+                else None
+            ),
+            notified_at=(
+                DecisionStore._parse_datetime(row["notified_at"])
+                if row["notified_at"] is not None
                 else None
             ),
         )
