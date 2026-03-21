@@ -73,6 +73,7 @@ class DecisionServiceTests(unittest.TestCase):
                 self.assertNotIn("error", result)
                 self.assertIn("Сфокусируйся на onboarding", result["report"])
                 self.assertEqual(fake_processor.calls[0][2], 14)
+                self.assertIn("<b>Что у тебя повторяется:</b>", result["report"])
 
                 runs = store.list_recent(42)
                 self.assertEqual(len(runs), 1)
@@ -86,6 +87,10 @@ class DecisionServiceTests(unittest.TestCase):
                 reviews = store.list_reviews("42")
                 self.assertEqual(len(reviews), 1)
                 self.assertEqual(reviews[0].expected_outcome, "рост активаций; меньше drop-off")
+
+                patterns = store.list_patterns("42")
+                self.assertGreaterEqual(len(patterns), 1)
+                self.assertEqual(patterns[0].status.value, "active")
 
 
 if __name__ == "__main__":

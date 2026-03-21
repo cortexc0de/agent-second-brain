@@ -8,6 +8,7 @@ from typing import Any
 
 from d_brain.services.decision_models import DecisionRunStatus
 from d_brain.services.decision_store import DecisionStore
+from d_brain.services.pattern_detector import detect_patterns
 from d_brain.services.processor import ClaudeProcessor
 
 DEFAULT_DECISION_HORIZON_DAYS = 14
@@ -32,6 +33,7 @@ def format_decision_html(decision: dict[str, Any]) -> str:
     do_not_do = _normalize_lines(decision.get("do_not_do"))
     risks = _normalize_lines(decision.get("risks"))
     check_signals = _normalize_lines(decision.get("check_in_signals"))
+    patterns = _normalize_lines(decision.get("patterns"))
     counter_argument = html.escape(
         str(decision.get("counter_argument", "")).strip()
     )
@@ -57,6 +59,10 @@ def format_decision_html(decision: dict[str, Any]) -> str:
 
     if counter_argument:
         parts.extend(["", f"<b>Что может это опровергнуть:</b> {counter_argument}"])
+
+    if patterns:
+        parts.extend(["", "<b>Что у тебя повторяется:</b>"])
+        parts.extend(f"• {html.escape(item)}" for item in patterns)
 
     return "\n".join(parts)
 
@@ -96,8 +102,13 @@ class DecisionService:
             created_store = True
 
         try:
+            recent_records = store.list_records(str(user_id), limit=5) if store is not None else []
+            existing_patterns = store.list_patterns(str(user_id), limit=10) if store is not None else []
+            detected_patterns = detect_patterns(prompt, recent_records, existing_patterns)
+
             if store is not None:
                 create_review = getattr(store, "create_review", None)
+                persist_pattern = getattr(store, "persist_pattern", None)
                 persist_run = getattr(store, "persist_run", None)
                 persist_decision = getattr(store, "persist_decision", None)
 
@@ -139,9 +150,23 @@ class DecisionService:
                         due_at=record.review_date,
                         expected_outcome=expected_outcome,
                     )
+                if callable(persist_pattern):
+                    for pattern in detected_patterns:
+                        persist_pattern(
+                            user_id,
+                            name=pattern.name,
+                            category=pattern.category,
+                            description=pattern.description,
+                            evidence=pattern.evidence,
+                            confidence=pattern.confidence,
+                            status=pattern.status,
+                        )
         finally:
             if created_store and isinstance(store, DecisionStore):
                 store.close()
+
+        if detected_patterns:
+            decision["patterns"] = [pattern.description for pattern in detected_patterns[:2]]
 
         return {
             "report": format_decision_html(decision),
