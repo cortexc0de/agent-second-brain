@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from d_brain.services.decision_models import DecisionRunStatus, ReviewStatus
+from d_brain.services.decision_models import DecisionRunStatus, PatternStatus, ReviewStatus
 from d_brain.services.decision_store import DecisionStore
 
 
@@ -158,6 +158,54 @@ class DecisionStoreTests(unittest.TestCase):
 
         self.assertEqual([item.id for item in due_reviews], [due_review.id])
         self.assertNotIn(future_review.id, [item.id for item in due_reviews])
+
+    def test_persists_and_lists_patterns(self) -> None:
+        pattern = self.store.persist_pattern(
+            "workspace-1",
+            name="Premature pivot",
+            category="bias",
+            description="Switches direction before enough signal.",
+            evidence=["3 pivots in 2 weeks", "no validation window"],
+            confidence=0.91,
+            status=PatternStatus.WATCH,
+            last_seen_at=self.current_time,
+        )
+
+        self.assertEqual(pattern.id, 1)
+        self.assertEqual(pattern.workspace_id, "workspace-1")
+        self.assertEqual(pattern.status, PatternStatus.WATCH)
+        self.assertEqual(pattern.evidence, ["3 pivots in 2 weeks", "no validation window"])
+        self.assertEqual(pattern.last_seen_at, self.current_time)
+
+        self.current_time = self.current_time + timedelta(minutes=1)
+        second = self.store.persist_pattern(
+            1,
+            name="Risk avoidance",
+            category="thinking_style",
+            description="Prefers safe work over the high-leverage option.",
+            evidence=["chooses easier path under pressure"],
+            confidence=0.77,
+        )
+
+        self.assertEqual(second.id, 2)
+        self.assertEqual(second.status, PatternStatus.ACTIVE)
+
+        loaded = self.store.get_pattern(pattern.id)
+        self.assertEqual(loaded.description, "Switches direction before enough signal.")
+        self.assertEqual(loaded.evidence[0], "3 pivots in 2 weeks")
+
+        active_patterns = self.store.list_patterns("1", status=PatternStatus.ACTIVE)
+        watched_patterns = self.store.list_patterns("workspace-1", status=PatternStatus.WATCH)
+
+        self.assertEqual([item.id for item in active_patterns], [second.id])
+        self.assertEqual([item.id for item in watched_patterns], [pattern.id])
+
+        self.store.close()
+        self.store = DecisionStore(self.db_path, clock=self.clock)
+
+        reloaded = self.store.get_pattern(pattern.id)
+        self.assertEqual(reloaded.status, PatternStatus.WATCH)
+        self.assertEqual(reloaded.confidence, 0.91)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,8 @@ from d_brain.services.decision_models import (
     DecisionRecord,
     DecisionRun,
     DecisionRunStatus,
+    PatternRecord,
+    PatternStatus,
     ReviewRecord,
     ReviewStatus,
 )
@@ -95,12 +97,28 @@ class DecisionStore:
                     completed_at TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS pattern_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workspace_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_runs_workspace
                     ON decision_runs(workspace_id, id);
                 CREATE INDEX IF NOT EXISTS idx_records_workspace
                     ON decision_records(workspace_id, id);
                 CREATE INDEX IF NOT EXISTS idx_reviews_due
                     ON review_records(status, due_at, id);
+                CREATE INDEX IF NOT EXISTS idx_patterns_workspace
+                    ON pattern_records(workspace_id, id);
                 """
             )
 
@@ -140,6 +158,12 @@ class DecisionStore:
 
     @staticmethod
     def _status_value(status: DecisionRunStatus | ReviewStatus | str) -> str:
+        if isinstance(status, Enum):
+            return status.value
+        return str(status)
+
+    @staticmethod
+    def _pattern_status_value(status: PatternStatus | str) -> str:
         if isinstance(status, Enum):
             return status.value
         return str(status)
@@ -519,6 +543,107 @@ class DecisionStore:
             )
         return self.get_review(review_id)
 
+    def persist_pattern(
+        self,
+        workspace_id_or_user_id: str | int,
+        *,
+        name: str,
+        category: str,
+        description: str,
+        evidence: list[str],
+        confidence: float,
+        status: PatternStatus = PatternStatus.ACTIVE,
+        last_seen_at: datetime | None = None,
+    ) -> PatternRecord:
+        """Persist a deterministic pattern record."""
+        return self.create_pattern(
+            workspace_id=self._workspace_key(workspace_id_or_user_id),
+            name=name,
+            category=category,
+            description=description,
+            evidence=evidence,
+            confidence=confidence,
+            status=status,
+            last_seen_at=last_seen_at or self._now(),
+        )
+
+    def create_pattern(
+        self,
+        *,
+        workspace_id: str,
+        name: str,
+        category: str,
+        description: str,
+        evidence: list[str],
+        confidence: float,
+        status: PatternStatus = PatternStatus.ACTIVE,
+        last_seen_at: datetime,
+    ) -> PatternRecord:
+        now = self._now()
+        with self._conn:
+            cursor = self._conn.execute(
+                """
+                INSERT INTO pattern_records (
+                    workspace_id,
+                    name,
+                    category,
+                    description,
+                    evidence_json,
+                    confidence,
+                    status,
+                    last_seen_at,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    workspace_id,
+                    name,
+                    category,
+                    description,
+                    self._dump_json_list(evidence),
+                    confidence,
+                    self._pattern_status_value(status),
+                    self._serialize_datetime(last_seen_at),
+                    self._serialize_datetime(now),
+                    self._serialize_datetime(now),
+                ),
+            )
+        return self.get_pattern(cursor.lastrowid)
+
+    def get_pattern(self, pattern_id: int) -> PatternRecord:
+        row = self._conn.execute(
+            "SELECT * FROM pattern_records WHERE id = ?",
+            (pattern_id,),
+        ).fetchone()
+        if row is None:
+            raise DecisionStoreError(f"Pattern record {pattern_id} not found")
+        return self._row_to_pattern(row)
+
+    def list_patterns(
+        self,
+        workspace_id: str | None = None,
+        status: PatternStatus | None = None,
+        limit: int | None = None,
+    ) -> list[PatternRecord]:
+        query = "SELECT * FROM pattern_records"
+        params: list[object] = []
+        clauses: list[str] = []
+        if workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(workspace_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(self._pattern_status_value(status))
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY last_seen_at DESC, id DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = self._conn.execute(query, params).fetchall()
+        return [self._row_to_pattern(row) for row in rows]
+
     @staticmethod
     def _row_to_run(row: sqlite3.Row) -> DecisionRun:
         return DecisionRun(
@@ -573,4 +698,20 @@ class DecisionStore:
                 if row["completed_at"] is not None
                 else None
             ),
+        )
+
+    @staticmethod
+    def _row_to_pattern(row: sqlite3.Row) -> PatternRecord:
+        return PatternRecord(
+            id=row["id"],
+            workspace_id=row["workspace_id"],
+            name=row["name"],
+            category=row["category"],
+            description=row["description"],
+            evidence=DecisionStore._load_json_list(row["evidence_json"]),
+            confidence=row["confidence"],
+            status=PatternStatus(row["status"]),
+            last_seen_at=DecisionStore._parse_datetime(row["last_seen_at"]),
+            created_at=DecisionStore._parse_datetime(row["created_at"]),
+            updated_at=DecisionStore._parse_datetime(row["updated_at"]),
         )

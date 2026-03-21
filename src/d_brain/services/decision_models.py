@@ -25,6 +25,14 @@ class ReviewStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class PatternStatus(str, Enum):
+    """Lifecycle for a behavioral pattern."""
+
+    ACTIVE = "active"
+    WATCH = "watch"
+    ARCHIVED = "archived"
+
+
 @dataclass(slots=True)
 class DecisionRun:
     """Stored decision request and processing state."""
@@ -78,3 +86,20 @@ class ReviewRecord:
     agent_assessment: str | None
     created_at: datetime
     completed_at: datetime | None
+
+
+@dataclass(slots=True)
+class PatternRecord:
+    """Stored decision pattern or bias signal."""
+
+    id: int
+    workspace_id: str
+    name: str
+    category: str
+    description: str
+    evidence: list[str]
+    confidence: float
+    status: PatternStatus
+    last_seen_at: datetime
+    created_at: datetime
+    updated_at: datetime
