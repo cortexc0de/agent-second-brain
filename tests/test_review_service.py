@@ -94,11 +94,38 @@ class ReviewServiceTests(unittest.TestCase):
         updated = self.store.get_review(review_id)
         self.assertEqual(updated.status.value, "skipped")
 
+    def test_skip_review_rejects_foreign_review(self) -> None:
+        review_id = self._seed_due_review("workspace-1")
+
+        with self.assertRaises(ReviewServiceError):
+            self.service.skip_review(42, review_id)
+
     def test_complete_review_rejects_foreign_review(self) -> None:
         review_id = self._seed_due_review("workspace-1")
 
         with self.assertRaises(ReviewServiceError):
             self.service.complete_review(42, review_id, "Не должен иметь доступ")
+
+    def test_complete_review_rejects_already_completed_review(self) -> None:
+        review_id = self._seed_due_review()
+        self.service.complete_review(42, review_id, "Активации выросли, фокус подтвердился")
+
+        with self.assertRaises(ReviewServiceError):
+            self.service.complete_review(42, review_id, "Вторая попытка")
+
+    def test_skip_review_rejects_already_completed_review(self) -> None:
+        review_id = self._seed_due_review()
+        self.service.complete_review(42, review_id, "Активации выросли, фокус подтвердился")
+
+        with self.assertRaises(ReviewServiceError):
+            self.service.skip_review(42, review_id)
+
+    def test_complete_review_rejects_already_skipped_review(self) -> None:
+        review_id = self._seed_due_review()
+        self.service.skip_review(42, review_id)
+
+        with self.assertRaises(ReviewServiceError):
+            self.service.complete_review(42, review_id, "Поздний итог")
 
 
 if __name__ == "__main__":

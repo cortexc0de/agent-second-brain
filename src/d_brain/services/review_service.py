@@ -52,6 +52,11 @@ class ReviewService:
             raise ReviewServiceError("Review does not belong to this user")
 
     @staticmethod
+    def _ensure_open(review: ReviewRecord) -> None:
+        if review.status in {ReviewStatus.COMPLETED, ReviewStatus.SKIPPED}:
+            raise ReviewServiceError(f"Review {review.id} is already closed")
+
+    @staticmethod
     def _map_outcome_status(status: ReviewOutcomeStatus) -> DecisionOutcomeStatus:
         if status is ReviewOutcomeStatus.CONFIRMED:
             return DecisionOutcomeStatus.CONFIRMED
@@ -131,6 +136,7 @@ class ReviewService:
         try:
             review = store.get_review(review_id)
             self._ensure_owner(review, user_id)
+            self._ensure_open(review)
             record = store.get_record(review.decision_record_id)
             assessment = analyze_review_outcome(review.expected_outcome, outcome.strip())
             updated = store.update_review(
@@ -167,6 +173,7 @@ class ReviewService:
         try:
             review = store.get_review(review_id)
             self._ensure_owner(review, user_id)
+            self._ensure_open(review)
             record = store.get_record(review.decision_record_id)
             updated = store.update_review(
                 review_id,

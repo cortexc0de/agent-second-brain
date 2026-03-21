@@ -15,10 +15,19 @@ router = Router(name="decide")
 logger = logging.getLogger(__name__)
 
 
+async def _require_user_id(message: Message) -> int | None:
+    if message.from_user is None:
+        await message.answer("❌ <b>Ошибка:</b> Не удалось определить пользователя.")
+        return None
+    return message.from_user.id
+
+
 @router.message(Command("decide"))
 async def cmd_decide(message: Message, command: CommandObject) -> None:
     """Handle /decide command for structured decision support."""
-    user_id = message.from_user.id if message.from_user else 0
+    user_id = await _require_user_id(message)
+    if user_id is None:
+        return
 
     if not command.args or not command.args.strip():
         await message.answer(

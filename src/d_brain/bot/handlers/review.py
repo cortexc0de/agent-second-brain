@@ -18,10 +18,19 @@ def _build_review_service() -> ReviewService:
     return ReviewService(store_path=store_path)
 
 
+async def _require_user_id(message: Message) -> int | None:
+    if message.from_user is None:
+        await message.answer("❌ <b>Ошибка:</b> Не удалось определить пользователя.")
+        return None
+    return message.from_user.id
+
+
 @router.message(Command("review"))
 async def cmd_review(message: Message) -> None:
     """Show due reviews for the current user."""
-    user_id = message.from_user.id if message.from_user else 0
+    user_id = await _require_user_id(message)
+    if user_id is None:
+        return
     service = _build_review_service()
     try:
         result = service.render_review_overview(user_id)
@@ -35,7 +44,9 @@ async def cmd_review(message: Message) -> None:
 @router.message(Command("review_done"))
 async def cmd_review_done(message: Message, command: CommandObject) -> None:
     """Complete a review with a short outcome note."""
-    user_id = message.from_user.id if message.from_user else 0
+    user_id = await _require_user_id(message)
+    if user_id is None:
+        return
     if not command.args:
         await message.answer(
             "🔁 <b>Формат:</b> <code>/review_done ID что получилось</code>\n\n"
@@ -65,7 +76,9 @@ async def cmd_review_done(message: Message, command: CommandObject) -> None:
 @router.message(Command("review_skip"))
 async def cmd_review_skip(message: Message, command: CommandObject) -> None:
     """Skip a review checkpoint."""
-    user_id = message.from_user.id if message.from_user else 0
+    user_id = await _require_user_id(message)
+    if user_id is None:
+        return
     if not command.args or not command.args.strip().isdigit():
         await message.answer(
             "⏭️ <b>Формат:</b> <code>/review_skip ID</code>\n\n"

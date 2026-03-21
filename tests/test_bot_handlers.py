@@ -12,6 +12,8 @@ _MISSING = object()
 _ORIGINAL_MODULES: dict[str, object] = {}
 
 def _install_aiogram_stubs() -> None:
+    for module_name in ("aiogram", "aiogram.filters", "aiogram.types"):
+        _ORIGINAL_MODULES.setdefault(module_name, sys.modules.get(module_name, _MISSING))
     if "aiogram" in sys.modules:
         return
 
@@ -136,6 +138,30 @@ _restore_project_modules()
 
 
 class DecideHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cmd_decide_rejects_missing_user(self) -> None:
+        status_message = SimpleNamespace(edit_text=AsyncMock())
+        message = SimpleNamespace(
+            from_user=None,
+            answer=AsyncMock(return_value=status_message),
+        )
+        command = SimpleNamespace(args="куда идти дальше")
+        service = MagicMock()
+        import asyncio
+        done_task = asyncio.get_running_loop().create_future()
+        done_task.set_result({"report": "should not be used"})
+
+        with (
+            patch.object(decide, "DecisionService", return_value=service),
+            patch.object(decide.asyncio, "to_thread", new=lambda func, *args: done_task),
+            patch.object(decide.asyncio, "create_task", return_value=done_task),
+        ):
+            await decide.cmd_decide(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("Не удалось определить пользователя", reply_text)
+        service.decide.assert_not_called()
+
     async def test_cmd_decide_rejects_whitespace_only_args(self) -> None:
         status_message = SimpleNamespace(edit_text=AsyncMock())
         message = SimpleNamespace(
@@ -186,6 +212,18 @@ class DecideHandlerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cmd_review_rejects_missing_user(self) -> None:
+        message = SimpleNamespace(
+            from_user=None,
+            answer=AsyncMock(),
+        )
+
+        await review.cmd_review(message)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("Не удалось определить пользователя", reply_text)
+
     async def test_cmd_review_renders_overview(self) -> None:
         message = SimpleNamespace(
             from_user=SimpleNamespace(id=42),
@@ -243,6 +281,38 @@ class ReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
         message.answer.assert_awaited_once()
         reply_text = message.answer.await_args.args[0]
         self.assertIn("Нужны ID и результат", reply_text)
+
+    async def test_cmd_review_skip_completes_skip(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7")
+        service = MagicMock()
+        service.skip_review.return_value = "skipped"
+
+        with patch.object(review, "_build_review_service", return_value=service):
+            await review.cmd_review_skip(message, command)
+
+        service.skip_review.assert_called_once_with(42, 7)
+        message.answer.assert_awaited_once_with("skipped")
+
+    async def test_cmd_review_skip_handles_service_error(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7")
+        service = MagicMock()
+        service.skip_review.side_effect = ReviewServiceError("forbidden")
+
+        with patch.object(review, "_build_review_service", return_value=service):
+            await review.cmd_review_skip(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("Ошибка", reply_text)
+        self.assertIn("forbidden", reply_text)
 
 
 if __name__ == "__main__":
