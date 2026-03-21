@@ -92,6 +92,9 @@ class ReviewServiceTests(unittest.TestCase):
         rendered = self.service.render_review_overview(42)
 
         self.assertIn("Последняя доставка", rendered)
+        self.assertIn("Попыток доставки", rendered)
+        self.assertIn("1", rendered)
+        self.assertIn("Сбоев доставки", rendered)
         self.assertIn("failed (RuntimeError)", rendered)
         self.assertIn(f"/review_trace {review_id}", rendered)
         self.assertIn("Следующий шаг", rendered)
@@ -103,10 +106,59 @@ class ReviewServiceTests(unittest.TestCase):
         rendered = self.service.render_review_overview(42)
 
         self.assertIn("Последняя доставка", rendered)
+        self.assertIn("Попыток доставки", rendered)
+        self.assertIn("0", rendered)
         self.assertIn("trace пока пустой", rendered)
         self.assertIn(f"/review_trace {review_id}", rendered)
         self.assertIn("Следующий шаг", rendered)
         self.assertIn("проверь trace", rendered)
+
+    def test_render_review_overview_shows_delivery_attempt_summary(self) -> None:
+        review_id = self._seed_due_review()
+        review = self.store.get_review(review_id)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.CLAIMED,
+            worker_id="worker-a",
+        )
+        self.current_time = self.current_time + timedelta(seconds=1)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.FAILED,
+            worker_id="worker-a",
+            error_code="RuntimeError",
+            error_message="boom",
+        )
+        self.current_time = self.current_time + timedelta(seconds=1)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.RELEASED,
+            worker_id="worker-a",
+        )
+        self.current_time = self.current_time + timedelta(seconds=1)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.CLAIMED,
+            worker_id="worker-b",
+        )
+        self.current_time = self.current_time + timedelta(seconds=1)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.DELIVERED,
+            worker_id="worker-b",
+        )
+
+        rendered = self.service.render_review_overview(42)
+
+        self.assertIn("Попыток доставки", rendered)
+        self.assertIn("2", rendered)
+        self.assertIn("Сбоев доставки", rendered)
+        self.assertIn("1", rendered)
 
     def test_complete_review_updates_status_and_outcome(self) -> None:
         review_id = self._seed_due_review()

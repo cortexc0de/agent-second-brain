@@ -100,6 +100,20 @@ class ReviewService:
 
         return []
 
+    @staticmethod
+    def _render_delivery_attempt_summary(events: list[Any]) -> list[str]:
+        if not events:
+            return []
+
+        delivery_attempts = sum(
+            1 for event in events if event.event_type.value in {"failed", "delivered"}
+        )
+        failed_attempts = sum(1 for event in events if event.event_type.value == "failed")
+        return [
+            f"<b>Попыток доставки:</b> {delivery_attempts}",
+            f"<b>Сбоев доставки:</b> {failed_attempts}",
+        ]
+
     def list_due_reviews(self, user_id: int, limit: int = 5) -> list[ReviewRecord]:
         """List due reviews for a user and mark scheduled ones as due."""
         store, created_store = self._open_store()
@@ -136,6 +150,7 @@ class ReviewService:
                     f"<b>Что выбрали:</b> {html.escape(record.chosen_option)}",
                     f"<b>Что ожидали:</b> {html.escape(first.expected_outcome)}",
                     f"<b>Дедлайн ревью:</b> {html.escape(first.due_at.date().isoformat())}",
+                    *self._render_delivery_attempt_summary(latest_events),
                     *self._render_latest_delivery_status(first.id, latest_event),
                     *self._render_delivery_next_step(latest_event),
                     "",
