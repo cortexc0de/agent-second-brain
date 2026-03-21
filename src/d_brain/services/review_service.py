@@ -87,6 +87,19 @@ class ReviewService:
             f"<b>Trace целиком:</b> <code>/review_trace {review_id}</code>",
         ]
 
+    @staticmethod
+    def _render_delivery_next_step(latest_event: Any | None) -> list[str]:
+        if latest_event is None:
+            return ["<b>Следующий шаг:</b> проверь trace и delivery path, если review так и не приходит."]
+
+        if latest_event.event_type.value == "failed":
+            return ["<b>Следующий шаг:</b> проверь delivery path; ретрай уже запланирован."]
+
+        if latest_event.event_type.value in {"claimed", "released"}:
+            return ["<b>Следующий шаг:</b> открой trace, если статус долго не меняется."]
+
+        return []
+
     def list_due_reviews(self, user_id: int, limit: int = 5) -> list[ReviewRecord]:
         """List due reviews for a user and mark scheduled ones as due."""
         store, created_store = self._open_store()
@@ -124,6 +137,7 @@ class ReviewService:
                     f"<b>Что ожидали:</b> {html.escape(first.expected_outcome)}",
                     f"<b>Дедлайн ревью:</b> {html.escape(first.due_at.date().isoformat())}",
                     *self._render_latest_delivery_status(first.id, latest_event),
+                    *self._render_delivery_next_step(latest_event),
                     "",
                     f"<b>Завершить:</b> <code>/review_done {first.id} что получилось</code>",
                     f"<b>Пропустить:</b> <code>/review_skip {first.id}</code>",

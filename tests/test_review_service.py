@@ -94,6 +94,8 @@ class ReviewServiceTests(unittest.TestCase):
         self.assertIn("Последняя доставка", rendered)
         self.assertIn("failed (RuntimeError)", rendered)
         self.assertIn(f"/review_trace {review_id}", rendered)
+        self.assertIn("Следующий шаг", rendered)
+        self.assertIn("ретрай уже запланирован", rendered)
 
     def test_render_review_overview_shows_empty_delivery_status_when_trace_is_missing(self) -> None:
         review_id = self._seed_due_review()
@@ -103,6 +105,8 @@ class ReviewServiceTests(unittest.TestCase):
         self.assertIn("Последняя доставка", rendered)
         self.assertIn("trace пока пустой", rendered)
         self.assertIn(f"/review_trace {review_id}", rendered)
+        self.assertIn("Следующий шаг", rendered)
+        self.assertIn("проверь trace", rendered)
 
     def test_complete_review_updates_status_and_outcome(self) -> None:
         review_id = self._seed_due_review()
