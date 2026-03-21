@@ -1,7 +1,9 @@
 """Telegram bot initialization and polling."""
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import Any
 
 from aiogram import Bot, Dispatcher
@@ -10,7 +12,9 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Update
 
+from d_brain.bot.review_delivery import run_due_review_delivery_loop
 from d_brain.config import Settings
+from d_brain.services.due_review_worker import DueReviewWorker
 
 logger = logging.getLogger(__name__)
 
@@ -86,12 +90,24 @@ async def run_bot(settings: Settings) -> None:
     """Run the bot with polling."""
     bot = create_bot(settings)
     dp = create_dispatcher()
+    worker = DueReviewWorker(store_path=settings.vault_path / ".decision-store.sqlite3")
 
     # Always add auth middleware for security (it handles allow_all_users internally)
     dp.update.middleware(create_auth_middleware(settings))
+    due_review_task = asyncio.create_task(
+        run_due_review_delivery_loop(
+            bot,
+            worker=worker,
+            poll_interval_seconds=settings.due_review_poll_interval_seconds,
+            batch_limit=settings.due_review_batch_limit,
+        )
+    )
 
     logger.info("Starting bot polling...")
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        due_review_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await due_review_task
         await bot.session.close()

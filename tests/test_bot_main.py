@@ -5,6 +5,8 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 _MISSING = object()
 _ORIGINAL_MODULES: dict[str, object] = {}
@@ -17,6 +19,7 @@ def _install_aiogram_runtime_stubs() -> None:
         "aiogram.enums",
         "aiogram.fsm.storage.memory",
         "aiogram.types",
+        "d_brain.bot.review_delivery",
         "d_brain.config",
         "d_brain.bot.handlers",
     ):
@@ -75,6 +78,14 @@ def _install_project_stubs() -> None:
     config_module.Settings = type("Settings", (), {})
     sys.modules["d_brain.config"] = config_module
 
+    review_delivery_module = types.ModuleType("d_brain.bot.review_delivery")
+
+    async def run_due_review_delivery_loop(*args, **kwargs) -> None:
+        return None
+
+    review_delivery_module.run_due_review_delivery_loop = run_due_review_delivery_loop
+    sys.modules["d_brain.bot.review_delivery"] = review_delivery_module
+
     handlers_module = types.ModuleType("d_brain.bot.handlers")
     for name in ("buttons", "commands", "decide", "do", "forward", "photo", "process", "review", "text", "voice", "weekly"):
         setattr(handlers_module, name, types.SimpleNamespace(router=f"{name}-router"))
@@ -131,6 +142,50 @@ class BotMainTests(unittest.TestCase):
                 "text-router",
             ],
         )
+
+    def test_run_bot_starts_delivery_loop_and_cancels_it_on_shutdown(self) -> None:
+        import asyncio
+
+        async def scenario() -> None:
+            sentinel_middleware = object()
+            middleware = MagicMock()
+            bot = SimpleNamespace(session=SimpleNamespace(close=AsyncMock()))
+            async def fake_start_polling(*args, **kwargs) -> None:
+                await asyncio.sleep(0)
+
+            dispatcher = SimpleNamespace(
+                update=SimpleNamespace(middleware=middleware),
+                resolve_used_update_types=lambda: ["message"],
+                start_polling=AsyncMock(side_effect=fake_start_polling),
+            )
+            settings = SimpleNamespace(
+                vault_path=Path("/tmp"),
+                due_review_poll_interval_seconds=15,
+                due_review_batch_limit=4,
+            )
+            cancelled = asyncio.Event()
+
+            async def fake_delivery_loop(*args, **kwargs) -> None:
+                try:
+                    await asyncio.Future()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+            with (
+                patch.object(bot_main, "create_bot", return_value=bot),
+                patch.object(bot_main, "create_dispatcher", return_value=dispatcher),
+                patch.object(bot_main, "create_auth_middleware", return_value=sentinel_middleware),
+                patch.object(bot_main, "run_due_review_delivery_loop", side_effect=fake_delivery_loop),
+            ):
+                await bot_main.run_bot(settings)
+
+            middleware.assert_called_once_with(sentinel_middleware)
+            dispatcher.start_polling.assert_awaited_once_with(bot, allowed_updates=["message"])
+            bot.session.close.assert_awaited_once()
+            self.assertTrue(cancelled.is_set())
+
+        asyncio.run(scenario())
 
 
 if __name__ == "__main__":

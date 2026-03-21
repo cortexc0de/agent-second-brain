@@ -30,6 +30,14 @@ class Settings(BaseSettings):
         default=False,
         description="Whether to allow access to all users (security risk!)",
     )
+    due_review_poll_interval_seconds: int = Field(
+        default=300,
+        description="Polling interval for proactive due-review delivery loop",
+    )
+    due_review_batch_limit: int = Field(
+        default=20,
+        description="Maximum due reviews delivered per polling cycle",
+    )
 
     @property
     def daily_path(self) -> Path:
