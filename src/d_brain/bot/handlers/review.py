@@ -1,0 +1,78 @@
+"""Handlers for review-loop commands."""
+
+from __future__ import annotations
+
+from aiogram import Router
+from aiogram.filters import Command, CommandObject
+from aiogram.types import Message
+
+from d_brain.config import get_settings
+from d_brain.services.review_service import ReviewService, ReviewServiceError
+
+router = Router(name="review")
+
+
+def _build_review_service() -> ReviewService:
+    settings = get_settings()
+    store_path = settings.vault_path / ".decision-store.sqlite3"
+    return ReviewService(store_path=store_path)
+
+
+@router.message(Command("review"))
+async def cmd_review(message: Message) -> None:
+    """Show due reviews for the current user."""
+    user_id = message.from_user.id if message.from_user else 0
+    service = _build_review_service()
+    await message.answer(service.render_review_overview(user_id))
+
+
+@router.message(Command("review_done"))
+async def cmd_review_done(message: Message, command: CommandObject) -> None:
+    """Complete a review with a short outcome note."""
+    user_id = message.from_user.id if message.from_user else 0
+    if not command.args:
+        await message.answer(
+            "🔁 <b>Формат:</b> <code>/review_done ID что получилось</code>\n\n"
+            "Пример:\n"
+            "<code>/review_done 3 активации выросли, фокус подтвердился</code>"
+        )
+        return
+
+    parts = command.args.strip().split(maxsplit=1)
+    if len(parts) != 2 or not parts[0].isdigit():
+        await message.answer(
+            "❌ <b>Нужны ID и результат.</b>\n"
+            "Используй формат: <code>/review_done ID что получилось</code>"
+        )
+        return
+
+    service = _build_review_service()
+    try:
+        result = service.complete_review(user_id, int(parts[0]), parts[1])
+    except ReviewServiceError as exc:
+        await message.answer(f"❌ <b>Ошибка:</b> {exc}")
+        return
+
+    await message.answer(result)
+
+
+@router.message(Command("review_skip"))
+async def cmd_review_skip(message: Message, command: CommandObject) -> None:
+    """Skip a review checkpoint."""
+    user_id = message.from_user.id if message.from_user else 0
+    if not command.args or not command.args.strip().isdigit():
+        await message.answer(
+            "⏭️ <b>Формат:</b> <code>/review_skip ID</code>\n\n"
+            "Пример:\n"
+            "<code>/review_skip 3</code>"
+        )
+        return
+
+    service = _build_review_service()
+    try:
+        result = service.skip_review(user_id, int(command.args.strip()))
+    except ReviewServiceError as exc:
+        await message.answer(f"❌ <b>Ошибка:</b> {exc}")
+        return
+
+    await message.answer(result)

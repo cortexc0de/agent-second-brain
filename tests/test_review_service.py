@@ -5,8 +5,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from d_brain.services.decision_models import ReviewStatus
 from d_brain.services.decision_store import DecisionStore
+from d_brain.services.review_service import ReviewService, ReviewServiceError
 
 
 class ReviewServiceTests(unittest.TestCase):
@@ -15,6 +15,7 @@ class ReviewServiceTests(unittest.TestCase):
         self.db_path = Path(self.tmpdir.name) / "decision-store.sqlite3"
         self.current_time = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
         self.store = DecisionStore(self.db_path, clock=self.clock)
+        self.service = ReviewService(store=self.store, clock=self.clock)
 
     def tearDown(self) -> None:
         self.store.close()
@@ -23,71 +24,64 @@ class ReviewServiceTests(unittest.TestCase):
     def clock(self) -> datetime:
         return self.current_time
 
-    def _seed_due_review(self):
-        run = self.store.persist_run(
-            "workspace-1",
-            "Should I focus on onboarding?",
-            decision_type="prioritize",
-        )
+    def _seed_due_review(self, workspace_id: str = "42") -> int:
+        run = self.store.persist_run(workspace_id, "What should I focus on?")
         record = self.store.persist_decision(
-            "workspace-1",
+            workspace_id,
             decision_run_id=run.id,
             title="Focus on onboarding",
             decision_summary="Freeze experiments and focus on onboarding.",
             chosen_option="Onboarding",
-            rejected_options=["Landing page"],
-            why="It has the clearest signal.",
-            risks="Signal may be small.",
-            expected_signals=["more activations", "fewer drop-offs"],
-            decision_type="prioritize",
-            time_horizon_days=14,
-            confidence=0.8,
+            rejected_options=["New feature"],
+            why="Highest evidence.",
+            risks="Sample too small.",
+            expected_signals=["more activations"],
         )
         review = self.store.create_review(
-            workspace_id="workspace-1",
+            workspace_id=workspace_id,
             decision_record_id=record.id,
-            due_at=self.current_time - timedelta(hours=1),
-            expected_outcome="Onboarding conversion should improve.",
+            due_at=self.current_time - timedelta(days=1),
+            expected_outcome="more activations",
         )
-        return record, review
+        return review.id
 
-    def test_lists_due_reviews_and_formats_prompt(self) -> None:
-        from d_brain.services.review_service import ReviewService
+    def test_render_review_overview_shows_due_review_and_commands(self) -> None:
+        review_id = self._seed_due_review()
 
-        record, review = self._seed_due_review()
-        service = ReviewService(self.store, clock=self.clock)
+        rendered = self.service.render_review_overview(42)
 
-        due_reviews = service.list_due_reviews()
-        self.assertEqual([item.id for item in due_reviews], [review.id])
+        self.assertIn("Пора проверить решение", rendered)
+        self.assertIn(f"<code>{review_id}</code>", rendered)
+        self.assertIn("/review_done", rendered)
+        self.assertIn("/review_skip", rendered)
 
-        prompt = service.format_review_prompt(review)
-        self.assertIn("Review check-in", prompt)
-        self.assertIn("Focus on onboarding", prompt)
-        self.assertIn(record.chosen_option, prompt)
-        self.assertIn("Expected signals", prompt)
+        updated = self.store.get_review(review_id)
+        self.assertEqual(updated.status.value, "due")
 
-    def test_completes_and_skips_reviews(self) -> None:
-        from d_brain.services.review_service import ReviewService
+    def test_complete_review_updates_status_and_outcome(self) -> None:
+        review_id = self._seed_due_review()
 
-        _, review = self._seed_due_review()
-        service = ReviewService(self.store, clock=self.clock)
+        rendered = self.service.complete_review(42, review_id, "Активации выросли, фокус подтвердился")
 
-        self.current_time = self.current_time + timedelta(minutes=10)
-        completed = service.mark_completed(
-            review.id,
-            actual_outcome="Conversion improved after narrowing focus.",
-            user_response="Done.",
-            agent_assessment="Validated.",
-        )
+        self.assertIn("Review закрыт", rendered)
+        updated = self.store.get_review(review_id)
+        self.assertEqual(updated.status.value, "completed")
+        self.assertEqual(updated.actual_outcome, "Активации выросли, фокус подтвердился")
 
-        self.assertEqual(completed.status, ReviewStatus.COMPLETED)
-        self.assertEqual(completed.completed_at, self.current_time)
+    def test_skip_review_updates_status(self) -> None:
+        review_id = self._seed_due_review()
 
-        self.current_time = self.current_time + timedelta(minutes=10)
-        skipped = service.mark_skipped(review.id, reason="Not enough signal yet.")
+        rendered = self.service.skip_review(42, review_id)
 
-        self.assertEqual(skipped.status, ReviewStatus.SKIPPED)
-        self.assertEqual(skipped.completed_at, self.current_time)
+        self.assertIn("Review пропущен", rendered)
+        updated = self.store.get_review(review_id)
+        self.assertEqual(updated.status.value, "skipped")
+
+    def test_complete_review_rejects_foreign_review(self) -> None:
+        review_id = self._seed_due_review("workspace-1")
+
+        with self.assertRaises(ReviewServiceError):
+            self.service.complete_review(42, review_id, "Не должен иметь доступ")
 
 
 if __name__ == "__main__":
