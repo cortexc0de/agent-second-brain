@@ -3,6 +3,7 @@
 from d_brain.bot.handlers import (
     buttons,
     commands,
+    decide,
     do,
     forward,
     photo,
@@ -15,6 +16,7 @@ from d_brain.bot.handlers import (
 __all__ = [
     "buttons",
     "commands",
+    "decide",
     "do",
     "forward",
     "photo",

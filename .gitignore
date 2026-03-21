@@ -35,3 +35,4 @@ vault/.graph/
 vault/business/
 vault/projects/
 vault/thoughts/
+vault/.decision-store.sqlite3

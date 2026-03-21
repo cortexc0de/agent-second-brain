@@ -1,7 +1,9 @@
 """Claude processing service."""
 
+import json
 import logging
 import os
+import re
 import subprocess
 from datetime import date
 from pathlib import Path
@@ -39,6 +41,20 @@ class ClaudeProcessor:
         if ref_path.exists():
             return ref_path.read_text()
         return ""
+
+    def _extract_json_object(self, raw_output: str) -> dict[str, Any]:
+        """Extract a JSON object from Claude output."""
+        text = raw_output.strip()
+        if not text:
+            raise ValueError("Empty Claude output")
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+            if not match:
+                raise
+            return json.loads(match.group(0))
 
     def _get_session_context(self, user_id: int) -> str:
         """Get today's session context for Claude.
@@ -317,6 +333,94 @@ EXECUTION:
             return {"error": "Claude CLI not installed", "processed_entries": 0}
         except Exception as e:
             logger.exception("Unexpected error during execution")
+            return {"error": str(e), "processed_entries": 0}
+
+    def execute_decision(
+        self,
+        user_prompt: str,
+        user_id: int = 0,
+        horizon_days: int = 14,
+    ) -> dict[str, Any]:
+        """Execute a decision-specific reasoning flow and return structured JSON."""
+        today = date.today()
+        session_context = self._get_session_context(user_id)
+
+        prompt = f"""Ты - Founder Decision Partner.
+
+CONTEXT:
+- Current date: {today}
+- Default decision horizon: {horizon_days} days
+- Vault path: {self.vault_path}
+
+{session_context}
+TASK:
+Помоги пользователю принять одно решение на ближайшие {horizon_days} дней.
+
+RULES:
+- Дай ОДНУ жёсткую рекомендацию
+- Не будь коучем
+- Не перечисляй нейтральные варианты без позиции
+- Если видишь повторяющийся паттерн или самообман, назови его прямо
+- Опирайся на контекст сессии и память
+- Горизонт по умолчанию {horizon_days} дней
+- Если данных мало, всё равно дай лучший рабочий verdict и явно назови, что проверить
+
+USER REQUEST:
+{user_prompt}
+
+RETURN ONLY VALID JSON:
+{{
+  "title": "short title",
+  "decision_type": "prioritize|choose|cut|unblock",
+  "summary": "one sentence summary",
+  "verdict": "single direct recommendation",
+  "why": ["reason 1", "reason 2"],
+  "do_not_do": ["thing to stop 1", "thing to stop 2"],
+  "risks": ["risk 1"],
+  "check_in_days": {horizon_days},
+  "check_in_signals": ["signal 1", "signal 2"],
+  "counter_argument": "what could prove this wrong"
+}}"""
+
+        try:
+            result = subprocess.run(
+                [
+                    "claude",
+                    "--print",
+                    "--dangerously-skip-permissions",
+                    "-p",
+                    prompt,
+                ],
+                cwd=self.vault_path.parent,
+                capture_output=True,
+                text=True,
+                timeout=DEFAULT_TIMEOUT,
+                check=False,
+            )
+
+            if result.returncode != 0:
+                logger.error("Claude decision execution failed: %s", result.stderr)
+                return {
+                    "error": result.stderr or "Claude decision execution failed",
+                    "processed_entries": 0,
+                }
+
+            decision = self._extract_json_object(result.stdout)
+            return {
+                "decision": decision,
+                "processed_entries": 1,
+            }
+        except subprocess.TimeoutExpired:
+            logger.error("Claude decision execution timed out")
+            return {"error": "Decision execution timed out", "processed_entries": 0}
+        except FileNotFoundError:
+            logger.error("Claude CLI not found")
+            return {"error": "Claude CLI not installed", "processed_entries": 0}
+        except json.JSONDecodeError:
+            logger.exception("Claude decision output was not valid JSON")
+            return {"error": "Claude returned invalid decision JSON", "processed_entries": 0}
+        except Exception as e:
+            logger.exception("Unexpected error during decision execution")
             return {"error": str(e), "processed_entries": 0}
 
     def generate_weekly(self) -> dict[str, Any]:
