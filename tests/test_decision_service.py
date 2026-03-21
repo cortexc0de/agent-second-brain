@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import d_brain.services.decision_service as decision_service_module
+from d_brain.services.decision_models import DecisionOutcomeStatus
 from d_brain.services.decision_service import DecisionService, format_decision_html
 from d_brain.services.decision_store import DecisionStore
 
@@ -299,7 +300,67 @@ class DecisionServiceTests(unittest.TestCase):
                 self.assertIn("Второй запрос про приоритет", rendered)
                 self.assertIn("/decide_trace 2", rendered)
                 self.assertIn("/review_trace 2", rendered)
-                self.assertIn("unknown", rendered)
+                self.assertIn("Без итога", rendered)
+
+    def test_render_recent_decisions_prioritizes_follow_up_outcomes(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                first = service.decide("Первый запрос про фокус", user_id=42)
+                second = service.decide("Второй запрос про приоритет", user_id=42)
+
+                self.assertNotIn("error", first)
+                self.assertNotIn("error", second)
+
+                store.update_record_outcome(
+                    1,
+                    outcome_status=DecisionOutcomeStatus.INVALIDATED,
+                    outcome_summary="Решение не подтвердилось",
+                    needs_follow_up=True,
+                )
+
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Требует внимания", rendered)
+                self.assertIn("Не подтвердилось", rendered)
+                self.assertLess(
+                    rendered.index("Первый запрос про фокус"),
+                    rendered.index("Второй запрос про приоритет"),
+                )
+
+    def test_render_recent_decisions_shows_friendly_outcome_labels(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                result = service.decide("Запрос про фокус", user_id=42)
+                self.assertNotIn("error", result)
+                store.update_record_outcome(
+                    1,
+                    outcome_status=DecisionOutcomeStatus.CONFIRMED,
+                    outcome_summary="Решение подтвердилось",
+                    needs_follow_up=False,
+                )
+
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Подтвердилось", rendered)
+                self.assertNotIn("<b>Outcome:</b> confirmed", rendered)
 
     def test_render_recent_decisions_shows_empty_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

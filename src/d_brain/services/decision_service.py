@@ -107,11 +107,43 @@ class DecisionService:
         if str(run.workspace_id) != str(user_id):
             raise DecisionServiceError("Decision trace does not belong to this user")
 
+    @staticmethod
+    def _decision_attention_rank(record: Any) -> tuple[int, int]:
+        if record.needs_follow_up:
+            return (0, -record.decision_run_id)
+        status = record.outcome_status.value
+        order = {
+            "invalidated": 1,
+            "mixed": 2,
+            "unknown": 3,
+            "confirmed": 4,
+        }
+        return (order.get(status, 5), -record.decision_run_id)
+
+    @staticmethod
+    def _render_outcome_label(record: Any) -> str:
+        status = record.outcome_status.value
+        labels = {
+            "invalidated": "Не подтвердилось",
+            "mixed": "🟡 Частично подтвердилось",
+            "unknown": "⚪ Без итога",
+            "confirmed": "🟢 Подтвердилось",
+        }
+        if record.needs_follow_up:
+            suffix = labels.get(status)
+            if suffix and status != "unknown":
+                return f"🔴 Требует внимания · {suffix}"
+            return "🔴 Требует внимания"
+        return labels.get(status, f"⚪ {html.escape(status)}")
+
     def render_recent_decisions(self, user_id: int, limit: int = 5) -> str:
         """Render a compact overview of latest persisted decisions."""
         store, created_store = self._open_store()
         try:
-            records = list(reversed(store.list_records(str(user_id))))[:limit]
+            records = sorted(
+                store.list_records(str(user_id)),
+                key=self._decision_attention_rank,
+            )[:limit]
             if not records:
                 return "🗂️ <b>Пока нет сохранённых решений</b>"
 
@@ -131,7 +163,7 @@ class DecisionService:
                         f"<b>Run:</b> <code>{run.id}</code>",
                         f"<b>Запрос:</b> {html.escape(run.request_text)}",
                         f"<b>Вердикт:</b> {html.escape(record.chosen_option)}",
-                        f"<b>Outcome:</b> {html.escape(record.outcome_status.value)}",
+                        f"<b>Итог:</b> {self._render_outcome_label(record)}",
                     ]
                 )
                 if review is not None:
