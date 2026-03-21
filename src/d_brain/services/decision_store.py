@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from enum import Enum
@@ -36,6 +37,7 @@ class DecisionStore:
         self._conn = sqlite3.connect(self.database_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        self._transaction_depth = 0
         self._init_schema()
 
     def close(self) -> None:
@@ -148,6 +150,33 @@ class DecisionStore:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value
+
+    @contextmanager
+    def transaction(self):
+        """Run multiple store writes in a single atomic SQLite transaction."""
+        if self._transaction_depth > 0:
+            self._transaction_depth += 1
+            try:
+                yield
+            finally:
+                self._transaction_depth -= 1
+            return
+
+        self._transaction_depth = 1
+        try:
+            with self._conn:
+                yield
+        finally:
+            self._transaction_depth = 0
+
+    @contextmanager
+    def _write(self):
+        if self._transaction_depth > 0:
+            yield
+            return
+
+        with self._conn:
+            yield
 
     @staticmethod
     def _workspace_key(workspace_id_or_user_id: str | int) -> str:
@@ -276,7 +305,7 @@ class DecisionStore:
         final_verdict: str | None = None,
     ) -> DecisionRun:
         now = self._now()
-        with self._conn:
+        with self._write():
             cursor = self._conn.execute(
                 """
                 INSERT INTO decision_runs (
@@ -370,7 +399,7 @@ class DecisionStore:
         confidence: float,
     ) -> DecisionRecord:
         now = self._now()
-        with self._conn:
+        with self._write():
             cursor = self._conn.execute(
                 """
                 INSERT INTO decision_records (
@@ -458,7 +487,7 @@ class DecisionStore:
         agent_assessment: str | None = None,
     ) -> ReviewRecord:
         now = self._now()
-        with self._conn:
+        with self._write():
             cursor = self._conn.execute(
                 """
                 INSERT INTO review_records (
@@ -550,7 +579,7 @@ class DecisionStore:
         completed_at = review.completed_at
         if status in {ReviewStatus.COMPLETED, ReviewStatus.SKIPPED}:
             completed_at = self._now()
-        with self._conn:
+        with self._write():
             self._conn.execute(
                 """
                 UPDATE review_records
@@ -583,7 +612,7 @@ class DecisionStore:
     ) -> DecisionRecord:
         reviewed_at = last_reviewed_at or self._now()
         record = self.get_record(record_id)
-        with self._conn:
+        with self._write():
             self._conn.execute(
                 """
                 UPDATE decision_records
@@ -642,7 +671,7 @@ class DecisionStore:
         last_seen_at: datetime,
     ) -> PatternRecord:
         now = self._now()
-        with self._conn:
+        with self._write():
             cursor = self._conn.execute(
                 """
                 INSERT INTO pattern_records (

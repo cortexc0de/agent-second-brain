@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from d_brain.services.pattern_detector import detect_patterns
 from d_brain.services.processor import ClaudeProcessor
 
 DEFAULT_DECISION_HORIZON_DAYS = 14
+logger = logging.getLogger(__name__)
 
 
 def _normalize_lines(value: Any) -> list[str]:
@@ -111,56 +113,98 @@ class DecisionService:
                 persist_pattern = getattr(store, "persist_pattern", None)
                 persist_run = getattr(store, "persist_run", None)
                 persist_decision = getattr(store, "persist_decision", None)
+                transaction = getattr(store, "transaction", None)
 
                 why_lines = _normalize_lines(decision.get("why"))
                 risk_lines = _normalize_lines(decision.get("risks"))
                 check_signals = _normalize_lines(decision.get("check_in_signals"))
                 run = None
                 record = None
+                try:
+                    if callable(transaction):
+                        with transaction():
+                            if callable(persist_run):
+                                run = persist_run(
+                                    user_id,
+                                    prompt,
+                                    verdict=str(decision.get("verdict", "")),
+                                    status=DecisionRunStatus.COMPLETED,
+                                    decision_type=str(decision.get("decision_type", "decision")),
+                                    time_horizon_days=int(decision.get("check_in_days") or self.horizon_days),
+                                )
+                            if callable(persist_decision) and run is not None:
+                                record = persist_decision(
+                                    user_id,
+                                    decision_run_id=run.id,
+                                    title=str(decision.get("title", "Decision")),
+                                    decision_type=str(decision.get("decision_type", "decision")),
+                                    decision_summary=str(decision.get("summary", "")),
+                                    chosen_option=str(decision.get("verdict", "")),
+                                    rejected_options=_normalize_lines(decision.get("do_not_do")),
+                                    why="\n".join(why_lines),
+                                    risks="\n".join(risk_lines),
+                                    expected_signals=check_signals,
+                                    time_horizon_days=int(decision.get("check_in_days") or self.horizon_days),
+                                    confidence=float(decision.get("confidence") or 0.0),
+                                )
+                            if callable(create_review) and record is not None:
+                                expected_outcome = "; ".join(check_signals) or str(decision.get("summary", ""))
+                                create_review(
+                                    workspace_id=str(user_id),
+                                    decision_record_id=record.id,
+                                    due_at=record.review_date,
+                                    expected_outcome=expected_outcome,
+                                )
+                    else:
+                        if callable(persist_run):
+                            run = persist_run(
+                                user_id,
+                                prompt,
+                                verdict=str(decision.get("verdict", "")),
+                                status=DecisionRunStatus.COMPLETED,
+                                decision_type=str(decision.get("decision_type", "decision")),
+                                time_horizon_days=int(decision.get("check_in_days") or self.horizon_days),
+                            )
+                        if callable(persist_decision) and run is not None:
+                            record = persist_decision(
+                                user_id,
+                                decision_run_id=run.id,
+                                title=str(decision.get("title", "Decision")),
+                                decision_type=str(decision.get("decision_type", "decision")),
+                                decision_summary=str(decision.get("summary", "")),
+                                chosen_option=str(decision.get("verdict", "")),
+                                rejected_options=_normalize_lines(decision.get("do_not_do")),
+                                why="\n".join(why_lines),
+                                risks="\n".join(risk_lines),
+                                expected_signals=check_signals,
+                                time_horizon_days=int(decision.get("check_in_days") or self.horizon_days),
+                                confidence=float(decision.get("confidence") or 0.0),
+                            )
+                        if callable(create_review) and record is not None:
+                            expected_outcome = "; ".join(check_signals) or str(decision.get("summary", ""))
+                            create_review(
+                                workspace_id=str(user_id),
+                                decision_record_id=record.id,
+                                due_at=record.review_date,
+                                expected_outcome=expected_outcome,
+                            )
+                except Exception as exc:
+                    return {"error": f"Failed to persist decision: {exc}", "processed_entries": 0}
 
-                if callable(persist_run):
-                    run = persist_run(
-                        user_id,
-                        prompt,
-                        verdict=str(decision.get("verdict", "")),
-                        status=DecisionRunStatus.COMPLETED,
-                        decision_type=str(decision.get("decision_type", "decision")),
-                        time_horizon_days=int(decision.get("check_in_days") or self.horizon_days),
-                    )
-                if callable(persist_decision) and run is not None:
-                    record = persist_decision(
-                        user_id,
-                        decision_run_id=run.id,
-                        title=str(decision.get("title", "Decision")),
-                        decision_type=str(decision.get("decision_type", "decision")),
-                        decision_summary=str(decision.get("summary", "")),
-                        chosen_option=str(decision.get("verdict", "")),
-                        rejected_options=_normalize_lines(decision.get("do_not_do")),
-                        why="\n".join(why_lines),
-                        risks="\n".join(risk_lines),
-                        expected_signals=check_signals,
-                        time_horizon_days=int(decision.get("check_in_days") or self.horizon_days),
-                        confidence=float(decision.get("confidence") or 0.0),
-                    )
-                if callable(create_review) and record is not None:
-                    expected_outcome = "; ".join(check_signals) or str(decision.get("summary", ""))
-                    create_review(
-                        workspace_id=str(user_id),
-                        decision_record_id=record.id,
-                        due_at=record.review_date,
-                        expected_outcome=expected_outcome,
-                    )
                 if callable(persist_pattern):
                     for pattern in detected_patterns:
-                        persist_pattern(
-                            user_id,
-                            name=pattern.name,
-                            category=pattern.category,
-                            description=pattern.description,
-                            evidence=pattern.evidence,
-                            confidence=pattern.confidence,
-                            status=pattern.status,
-                        )
+                        try:
+                            persist_pattern(
+                                user_id,
+                                name=pattern.name,
+                                category=pattern.category,
+                                description=pattern.description,
+                                evidence=pattern.evidence,
+                                confidence=pattern.confidence,
+                                status=pattern.status,
+                            )
+                        except Exception:
+                            logger.warning("Pattern persistence failed", exc_info=True)
         finally:
             if created_store and isinstance(store, DecisionStore):
                 store.close()
