@@ -102,6 +102,8 @@ class ReviewServiceTests(unittest.TestCase):
 
     def test_render_review_overview_shows_empty_delivery_status_when_trace_is_missing(self) -> None:
         review_id = self._seed_due_review()
+        review = self.store.get_review(review_id)
+        self.current_time = review.due_at + timedelta(hours=1)
 
         rendered = self.service.render_review_overview(42)
 
@@ -158,6 +160,43 @@ class ReviewServiceTests(unittest.TestCase):
         self.assertIn("2", rendered)
         self.assertIn("Сбоев доставки", rendered)
         self.assertIn("1", rendered)
+
+    def test_render_review_overview_escalates_stale_failed_delivery(self) -> None:
+        review_id = self._seed_due_review()
+        review = self.store.get_review(review_id)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.CLAIMED,
+            worker_id="worker-a",
+        )
+        self.current_time = self.current_time + timedelta(seconds=1)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.FAILED,
+            worker_id="worker-a",
+            error_code="RuntimeError",
+            error_message="boom",
+        )
+        self.current_time = self.current_time + timedelta(hours=7)
+
+        rendered = self.service.render_review_overview(42)
+
+        self.assertIn("Следующий шаг", rendered)
+        self.assertIn("завис слишком долго", rendered)
+        self.assertIn("проверь worker", rendered)
+
+    def test_render_review_overview_escalates_empty_trace_when_review_is_stale(self) -> None:
+        review_id = self._seed_due_review()
+        self.current_time = self.current_time + timedelta(hours=7)
+
+        rendered = self.service.render_review_overview(42)
+
+        self.assertIn(f"/review_trace {review_id}", rendered)
+        self.assertIn("Следующий шаг", rendered)
+        self.assertIn("trace так и не появился", rendered)
+        self.assertIn("scheduler", rendered)
 
     def test_complete_review_updates_status_and_outcome(self) -> None:
         review_id = self._seed_due_review()

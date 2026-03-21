@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,8 @@ class ReviewServiceError(RuntimeError):
 
 class ReviewService:
     """Service for listing and closing review checkpoints."""
+
+    DELIVERY_STALE_AFTER = timedelta(hours=6)
 
     def __init__(
         self,
@@ -87,15 +89,36 @@ class ReviewService:
             f"<b>Trace целиком:</b> <code>/review_trace {review_id}</code>",
         ]
 
-    @staticmethod
-    def _render_delivery_next_step(latest_event: Any | None) -> list[str]:
+    def _is_stale(self, occurred_at: datetime) -> bool:
+        return self._now() - occurred_at >= self.DELIVERY_STALE_AFTER
+
+    def _render_delivery_next_step(
+        self,
+        review: ReviewRecord,
+        latest_event: Any | None,
+    ) -> list[str]:
         if latest_event is None:
+            if self._is_stale(review.due_at):
+                return [
+                    "<b>Следующий шаг:</b> trace так и не появился; "
+                    "проверь scheduler и delivery path вручную."
+                ]
             return ["<b>Следующий шаг:</b> проверь trace и delivery path, если review так и не приходит."]
 
         if latest_event.event_type.value == "failed":
+            if self._is_stale(latest_event.created_at):
+                return [
+                    "<b>Следующий шаг:</b> delivery path завис слишком долго; "
+                    "проверь worker и scheduler вручную."
+                ]
             return ["<b>Следующий шаг:</b> проверь delivery path; ретрай уже запланирован."]
 
         if latest_event.event_type.value in {"claimed", "released"}:
+            if self._is_stale(latest_event.created_at):
+                return [
+                    "<b>Следующий шаг:</b> delivery path завис слишком долго; "
+                    "проверь worker и trace вручную."
+                ]
             return ["<b>Следующий шаг:</b> открой trace, если статус долго не меняется."]
 
         return []
@@ -152,7 +175,7 @@ class ReviewService:
                     f"<b>Дедлайн ревью:</b> {html.escape(first.due_at.date().isoformat())}",
                     *self._render_delivery_attempt_summary(latest_events),
                     *self._render_latest_delivery_status(first.id, latest_event),
-                    *self._render_delivery_next_step(latest_event),
+                    *self._render_delivery_next_step(first, latest_event),
                     "",
                     f"<b>Завершить:</b> <code>/review_done {first.id} что получилось</code>",
                     f"<b>Пропустить:</b> <code>/review_skip {first.id}</code>",
