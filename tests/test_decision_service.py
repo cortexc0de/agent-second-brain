@@ -417,6 +417,89 @@ class DecisionServiceTests(unittest.TestCase):
                 rendered = service.render_recent_decisions(42)
 
                 self.assertIn("Review скоро", rendered)
+                self.assertIn("Следующее действие", rendered)
+                self.assertIn("Подготовь review", rendered)
+                self.assertIn("/review_trace 1", rendered)
+
+    def test_render_recent_decisions_suggests_closing_overdue_review(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+        current_time = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+
+        def clock() -> datetime:
+            return current_time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path, clock=clock) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                    clock=clock,
+                )
+
+                result = service.decide("Просроченный review", user_id=42)
+                self.assertNotIn("error", result)
+
+                current_time = current_time + timedelta(days=15)
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Следующее действие", rendered)
+                self.assertIn("Закрой review", rendered)
+                self.assertIn("/review_done 1", rendered)
+
+    def test_render_recent_decisions_suggests_revisiting_follow_up_decision(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                result = service.decide("Нужен follow-up", user_id=42)
+                self.assertNotIn("error", result)
+                store.update_record_outcome(
+                    1,
+                    outcome_status=DecisionOutcomeStatus.INVALIDATED,
+                    outcome_summary="Нужно пересмотреть",
+                    needs_follow_up=True,
+                )
+
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Следующее действие", rendered)
+                self.assertIn("Пересмотри решение", rendered)
+                self.assertIn("/decide_trace 1", rendered)
+
+    def test_render_recent_decisions_suggests_observing_confirmed_decision(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                )
+
+                result = service.decide("Подтверждённое решение", user_id=42)
+                self.assertNotIn("error", result)
+                store.update_record_outcome(
+                    1,
+                    outcome_status=DecisionOutcomeStatus.CONFIRMED,
+                    outcome_summary="Решение подтвердилось",
+                    needs_follow_up=False,
+                )
+
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Следующее действие", rendered)
+                self.assertIn("Наблюдай", rendered)
 
     def test_render_recent_decisions_shows_empty_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

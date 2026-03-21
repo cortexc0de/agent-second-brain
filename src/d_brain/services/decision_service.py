@@ -160,6 +160,56 @@ class DecisionService:
             return "🟡 Review скоро"
         return None
 
+    def _render_next_action(self, run: Any, record: Any, review: Any | None) -> str:
+        if record.needs_follow_up:
+            return (
+                f"<b>Следующее действие:</b> 🔴 Пересмотри решение — "
+                f"<code>/decide_trace {run.id}</code>"
+            )
+        if review is not None and review.status.value in {"scheduled", "due"}:
+            if review.due_at <= self._now():
+                return (
+                    f"<b>Следующее действие:</b> 🔴 Закрой review — "
+                    f"<code>/review_done {review.id} что получилось</code>"
+                )
+            if review.due_at <= self._now() + self.REVIEW_SOON_WINDOW:
+                return (
+                    f"<b>Следующее действие:</b> 🟡 Подготовь review — "
+                    f"<code>/review_trace {review.id}</code>"
+                )
+        status = record.outcome_status.value
+        if status == "invalidated":
+            return (
+                f"<b>Следующее действие:</b> 🔴 Пересобери решение — "
+                f"<code>/decide_trace {run.id}</code>"
+            )
+        if status == "mixed":
+            return (
+                f"<b>Следующее действие:</b> 🟡 Разбери, что сработало — "
+                f"<code>/decide_trace {run.id}</code>"
+            )
+        if status == "unknown":
+            if review is not None:
+                return (
+                    f"<b>Следующее действие:</b> ⚪ Держи в фокусе — "
+                    f"<code>/review_trace {review.id}</code>"
+                )
+            return (
+                f"<b>Следующее действие:</b> ⚪ Держи в фокусе — "
+                f"<code>/decide_trace {run.id}</code>"
+            )
+        if status == "confirmed":
+            if review is not None:
+                return (
+                    f"<b>Следующее действие:</b> 🟢 Наблюдай — "
+                    f"<code>/review_trace {review.id}</code>"
+                )
+            return (
+                f"<b>Следующее действие:</b> 🟢 Наблюдай — "
+                f"<code>/decide_trace {run.id}</code>"
+            )
+        return ""
+
     def render_recent_decisions(self, user_id: int, limit: int = 5) -> str:
         """Render a compact overview of latest persisted decisions."""
         store, created_store = self._open_store()
@@ -204,6 +254,9 @@ class DecisionService:
                         f"<code>/review_trace {review.id}</code> · "
                         f"<code>/review_done {review.id} что получилось</code>"
                     )
+                next_action = self._render_next_action(run, record, review)
+                if next_action:
+                    parts.append(next_action)
                 parts.append(f"<code>/decide_trace {run.id}</code>")
 
             return "\n".join(parts)
