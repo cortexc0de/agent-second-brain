@@ -106,8 +106,7 @@ class ReviewServiceTests(unittest.TestCase):
         rendered = self.service.render_review_overview(42)
 
         self.assertIn("Последняя доставка", rendered)
-        self.assertIn("Попыток доставки", rendered)
-        self.assertIn("0", rendered)
+        self.assertNotIn("Попыток доставки", rendered)
         self.assertIn("trace пока пустой", rendered)
         self.assertIn(f"/review_trace {review_id}", rendered)
         self.assertIn("Следующий шаг", rendered)
