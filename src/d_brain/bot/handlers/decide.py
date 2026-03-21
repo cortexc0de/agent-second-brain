@@ -13,6 +13,7 @@ from d_brain.services.decision_service import DecisionService, DecisionServiceEr
 
 router = Router(name="decide")
 logger = logging.getLogger(__name__)
+MAX_DECISIONS_LIMIT = 20
 
 
 def _build_decision_service() -> DecisionService:
@@ -123,7 +124,15 @@ async def cmd_decisions(message: Message, command: CommandObject | None = None) 
                 "<code>/decisions 10</code>"
             )
             return
-        limit = int(command.args.strip())
+        parsed_limit = int(command.args.strip())
+        if parsed_limit <= 0:
+            await message.answer(
+                "🗂️ <b>Формат:</b> <code>/decisions [limit]</code>\n\n"
+                "Пример:\n"
+                "<code>/decisions 10</code>"
+            )
+            return
+        limit = min(parsed_limit, MAX_DECISIONS_LIMIT)
 
     service = _build_decision_service()
     try:

@@ -88,8 +88,8 @@ def _install_project_stubs() -> None:
             def render_decision_trace(self, user_id: int, run_id: int) -> str:
                 return f"decision-trace:{user_id}:{run_id}"
 
-            def render_recent_decisions(self, user_id: int) -> str:
-                return f"recent-decisions:{user_id}"
+            def render_recent_decisions(self, user_id: int, limit: int = 5) -> str:
+                return f"recent-decisions:{user_id}:{limit}"
 
         decision_service_module.DecisionService = DecisionService
         decision_service_module.DecisionServiceError = DecisionServiceError
@@ -334,6 +334,34 @@ class DecideHandlerTests(unittest.IsolatedAsyncioTestCase):
         message.answer.assert_awaited_once()
         reply_text = message.answer.await_args.args[0]
         self.assertIn("/decisions [limit]", reply_text)
+
+    async def test_cmd_decisions_rejects_zero_limit_argument(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="0")
+
+        await decide.cmd_decisions(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("/decisions [limit]", reply_text)
+
+    async def test_cmd_decisions_clamps_large_limit_argument(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="999")
+        service = MagicMock()
+        service.render_recent_decisions.return_value = "recent-capped"
+
+        with patch.object(decide, "_build_decision_service", return_value=service):
+            await decide.cmd_decisions(message, command)
+
+        service.render_recent_decisions.assert_called_once_with(42, limit=20)
+        message.answer.assert_awaited_once_with("recent-capped")
 
     async def test_cmd_decisions_handles_service_error(self) -> None:
         message = SimpleNamespace(
