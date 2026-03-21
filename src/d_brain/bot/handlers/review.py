@@ -12,6 +12,8 @@ from d_brain.services.review_service import ReviewService, ReviewServiceError
 router = Router(name="review")
 DEFAULT_REVIEW_LIMIT = 3
 MAX_REVIEW_LIMIT = 20
+DEFAULT_REVIEW_TRACE_LIMIT = 10
+MAX_REVIEW_TRACE_LIMIT = 50
 
 
 def _build_review_service() -> ReviewService:
@@ -63,17 +65,42 @@ async def cmd_review_trace(message: Message, command: CommandObject) -> None:
     user_id = await _require_user_id(message)
     if user_id is None:
         return
-    if not command.args or not command.args.strip().isdigit():
+    if not command.args:
         await message.answer(
-            "🔎 <b>Формат:</b> <code>/review_trace ID</code>\n\n"
-            "Пример:\n"
-            "<code>/review_trace 3</code>"
+            "🔎 <b>Формат:</b> <code>/review_trace ID [limit]</code>\n\n"
+            "Примеры:\n"
+            "<code>/review_trace 3</code>\n"
+            "<code>/review_trace 3 20</code>"
         )
         return
 
+    parts = command.args.strip().split()
+    if len(parts) not in {1, 2} or not parts[0].isdigit():
+        await message.answer(
+            "🔎 <b>Формат:</b> <code>/review_trace ID [limit]</code>\n\n"
+            "Примеры:\n"
+            "<code>/review_trace 3</code>\n"
+            "<code>/review_trace 3 20</code>"
+        )
+        return
+
+    if len(parts) == 2 and (not parts[1].isdigit() or int(parts[1]) <= 0):
+        await message.answer(
+            "🔎 <b>Формат:</b> <code>/review_trace ID [limit]</code>\n\n"
+            "Примеры:\n"
+            "<code>/review_trace 3</code>\n"
+            "<code>/review_trace 3 20</code>"
+        )
+        return
+
+    review_id = int(parts[0])
+    limit = DEFAULT_REVIEW_TRACE_LIMIT
+    if len(parts) == 2:
+        limit = min(int(parts[1]), MAX_REVIEW_TRACE_LIMIT)
+
     service = _build_review_service()
     try:
-        result = service.render_review_trace(user_id, int(command.args.strip()))
+        result = service.render_review_trace(user_id, review_id, limit=limit)
     except ReviewServiceError as exc:
         await message.answer(f"❌ <b>Ошибка:</b> {exc}")
         return

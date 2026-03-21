@@ -243,7 +243,9 @@ class ReviewService:
             review = store.get_review(review_id)
             self._ensure_owner(review, user_id)
             record = store.get_record(review.decision_record_id)
-            events = store.list_review_delivery_events(review_id, limit=limit)
+            all_events = store.list_review_delivery_events(review_id)
+            events = all_events[:limit]
+            hidden_count = len(all_events) - len(events)
 
             parts = [
                 "🔎 <b>Delivery Trace</b>",
@@ -284,6 +286,13 @@ class ReviewService:
                     if metadata:
                         line.append(metadata)
                 parts.append(f"• {' — '.join(line)}")
+            if hidden_count > 0:
+                parts.extend(
+                    [
+                        "",
+                        f"<i>и ещё {hidden_count} — используй <code>/review_trace {review.id} [limit]</code></i>",
+                    ]
+                )
             return "\n".join(parts)
         except DecisionStoreError as exc:
             raise ReviewServiceError(str(exc)) from exc

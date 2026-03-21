@@ -518,6 +518,49 @@ class ReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
         reply_text = message.answer.await_args.args[0]
         self.assertIn("/review_trace ID", reply_text)
 
+    async def test_cmd_review_trace_accepts_numeric_limit(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7 15")
+        service = MagicMock()
+        service.render_review_trace.return_value = "trace-15"
+
+        with patch.object(review, "_build_review_service", return_value=service):
+            await review.cmd_review_trace(message, command)
+
+        service.render_review_trace.assert_called_once_with(42, 7, limit=15)
+        message.answer.assert_awaited_once_with("trace-15")
+
+    async def test_cmd_review_trace_rejects_invalid_limit(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7 nope")
+
+        await review.cmd_review_trace(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("/review_trace ID [limit]", reply_text)
+
+    async def test_cmd_review_trace_clamps_large_limit(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="7 99")
+        service = MagicMock()
+        service.render_review_trace.return_value = "trace-50"
+
+        with patch.object(review, "_build_review_service", return_value=service):
+            await review.cmd_review_trace(message, command)
+
+        service.render_review_trace.assert_called_once_with(42, 7, limit=50)
+        message.answer.assert_awaited_once_with("trace-50")
+
     async def test_cmd_review_trace_renders_trace(self) -> None:
         message = SimpleNamespace(
             from_user=SimpleNamespace(id=42),
@@ -530,7 +573,7 @@ class ReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(review, "_build_review_service", return_value=service):
             await review.cmd_review_trace(message, command)
 
-        service.render_review_trace.assert_called_once_with(42, 7)
+        service.render_review_trace.assert_called_once_with(42, 7, limit=10)
         message.answer.assert_awaited_once_with("trace")
 
     async def test_cmd_review_trace_handles_service_error(self) -> None:

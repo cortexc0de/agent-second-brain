@@ -387,6 +387,39 @@ class ReviewServiceTests(unittest.TestCase):
         self.assertIn("RuntimeError", rendered)
         self.assertIn("worker-a", rendered)
 
+    def test_render_review_trace_respects_event_limit(self) -> None:
+        review_id = self._seed_due_review()
+        review = self.store.get_review(review_id)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.CLAIMED,
+            worker_id="worker-a",
+        )
+        self.current_time = self.current_time + timedelta(seconds=1)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.FAILED,
+            worker_id="worker-a",
+            error_code="RuntimeError",
+            error_message="boom",
+        )
+        self.current_time = self.current_time + timedelta(seconds=1)
+        self.store.append_review_delivery_event(
+            review_id=review_id,
+            workspace_id=review.workspace_id,
+            event_type=ReviewDeliveryEventType.RELEASED,
+            worker_id="worker-a",
+        )
+
+        rendered = self.service.render_review_trace(42, review_id, limit=2)
+
+        self.assertIn("claimed", rendered)
+        self.assertIn("failed", rendered)
+        self.assertNotIn("released", rendered)
+        self.assertIn("/review_trace 1 [limit]", rendered)
+
     def test_render_review_trace_rejects_foreign_review(self) -> None:
         review_id = self._seed_due_review("workspace-1")
 
