@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,8 @@ def format_decision_html(decision: dict[str, Any]) -> str:
 class DecisionService:
     """High-level service for decision support requests."""
 
+    REVIEW_SOON_WINDOW = timedelta(days=2)
+
     def __init__(
         self,
         vault_path: str | Path,
@@ -89,11 +92,19 @@ class DecisionService:
         processor: ClaudeProcessor | None = None,
         store: Any | None = None,
         store_path: str | Path | None = None,
+        clock: callable | None = None,
     ) -> None:
         self.processor = processor or ClaudeProcessor(vault_path, todoist_api_key)
         self.horizon_days = horizon_days
         self.store = store
         self.store_path = store_path
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
 
     def _open_store(self) -> tuple[Any, bool]:
         if self.store is not None:
@@ -107,16 +118,20 @@ class DecisionService:
         if str(run.workspace_id) != str(user_id):
             raise DecisionServiceError("Decision trace does not belong to this user")
 
-    @staticmethod
-    def _decision_attention_rank(record: Any) -> tuple[int, int]:
+    def _decision_attention_rank(self, record: Any, review: Any | None) -> tuple[int, int]:
+        if review is not None and review.status.value in {"scheduled", "due"}:
+            if review.due_at <= self._now():
+                return (0, -record.decision_run_id)
+            if review.due_at <= self._now() + self.REVIEW_SOON_WINDOW:
+                return (1, -record.decision_run_id)
         if record.needs_follow_up:
-            return (0, -record.decision_run_id)
+            return (2, -record.decision_run_id)
         status = record.outcome_status.value
         order = {
-            "invalidated": 1,
-            "mixed": 2,
-            "unknown": 3,
-            "confirmed": 4,
+            "invalidated": 3,
+            "mixed": 4,
+            "unknown": 5,
+            "confirmed": 6,
         }
         return (order.get(status, 5), -record.decision_run_id)
 
@@ -136,27 +151,40 @@ class DecisionService:
             return "🔴 Требует внимания"
         return labels.get(status, f"⚪ {html.escape(status)}")
 
+    def _render_review_timing_label(self, review: Any | None) -> str | None:
+        if review is None or review.status.value not in {"scheduled", "due"}:
+            return None
+        if review.due_at <= self._now():
+            return "🔴 Review просрочен"
+        if review.due_at <= self._now() + self.REVIEW_SOON_WINDOW:
+            return "🟡 Review скоро"
+        return None
+
     def render_recent_decisions(self, user_id: int, limit: int = 5) -> str:
         """Render a compact overview of latest persisted decisions."""
         store, created_store = self._open_store()
         try:
-            records = sorted(
-                store.list_records(str(user_id)),
-                key=self._decision_attention_rank,
-            )[:limit]
-            if not records:
-                return "🗂️ <b>Пока нет сохранённых решений</b>"
-
             reviews_by_record_id = {
                 review.decision_record_id: review
                 for review in store.list_reviews(str(user_id))
             }
+            records = sorted(
+                store.list_records(str(user_id)),
+                key=lambda record: self._decision_attention_rank(
+                    record,
+                    reviews_by_record_id.get(record.id),
+                ),
+            )[:limit]
+            if not records:
+                return "🗂️ <b>Пока нет сохранённых решений</b>"
+
             parts = ["🗂️ <b>Последние решения</b>"]
 
             for record in records:
                 run = store.get_run(record.decision_run_id)
                 self._ensure_owner(run, user_id)
                 review = reviews_by_record_id.get(record.id)
+                review_timing_label = self._render_review_timing_label(review)
                 parts.extend(
                     [
                         "",
@@ -166,6 +194,8 @@ class DecisionService:
                         f"<b>Итог:</b> {self._render_outcome_label(record)}",
                     ]
                 )
+                if review_timing_label:
+                    parts.append(f"<b>Review-сигнал:</b> {review_timing_label}")
                 if review is not None:
                     parts.append(
                         f"<b>Review:</b> <code>{review.id}</code> ({html.escape(review.status.value)})"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -361,6 +362,61 @@ class DecisionServiceTests(unittest.TestCase):
 
                 self.assertIn("Подтвердилось", rendered)
                 self.assertNotIn("<b>Outcome:</b> confirmed", rendered)
+
+    def test_render_recent_decisions_prioritizes_overdue_reviews(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+        current_time = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+
+        def clock() -> datetime:
+            return current_time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path, clock=clock) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                    clock=clock,
+                )
+
+                first = service.decide("Старое решение", user_id=42)
+                current_time = current_time + timedelta(days=10)
+                second = service.decide("Новое решение", user_id=42)
+
+                self.assertNotIn("error", first)
+                self.assertNotIn("error", second)
+
+                current_time = current_time + timedelta(days=5)
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Review просрочен", rendered)
+                self.assertLess(rendered.index("Старое решение"), rendered.index("Новое решение"))
+
+    def test_render_recent_decisions_marks_review_due_soon(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+        current_time = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+
+        def clock() -> datetime:
+            return current_time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path, clock=clock) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                    clock=clock,
+                )
+
+                result = service.decide("Скоро review", user_id=42)
+                self.assertNotIn("error", result)
+
+                current_time = current_time + timedelta(days=13)
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Review скоро", rendered)
 
     def test_render_recent_decisions_shows_empty_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
