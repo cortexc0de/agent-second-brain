@@ -68,6 +68,25 @@ class ReviewService:
             return DecisionOutcomeStatus.INVALIDATED
         return DecisionOutcomeStatus.MIXED
 
+    @staticmethod
+    def _render_latest_delivery_status(review_id: int, latest_event: Any | None) -> list[str]:
+        if latest_event is None:
+            return [
+                "<b>Последняя доставка:</b> trace пока пустой",
+                f"<b>Trace целиком:</b> <code>/review_trace {review_id}</code>",
+            ]
+
+        status = latest_event.event_type.value
+        if latest_event.event_type.value == "failed" and latest_event.error_code:
+            status = f"{status} ({latest_event.error_code})"
+        elif latest_event.event_type.value == "claimed" and latest_event.worker_id:
+            status = f"{status} by {latest_event.worker_id}"
+
+        return [
+            f"<b>Последняя доставка:</b> {html.escape(status)}",
+            f"<b>Trace целиком:</b> <code>/review_trace {review_id}</code>",
+        ]
+
     def list_due_reviews(self, user_id: int, limit: int = 5) -> list[ReviewRecord]:
         """List due reviews for a user and mark scheduled ones as due."""
         store, created_store = self._open_store()
@@ -94,6 +113,8 @@ class ReviewService:
             if due_reviews:
                 first = due_reviews[0]
                 record = store.get_record(first.decision_record_id)
+                latest_events = store.list_review_delivery_events(first.id, limit=10)
+                latest_event = latest_events[-1] if latest_events else None
                 parts = [
                     "🔁 <b>Пора проверить решение</b>",
                     "",
@@ -102,6 +123,7 @@ class ReviewService:
                     f"<b>Что выбрали:</b> {html.escape(record.chosen_option)}",
                     f"<b>Что ожидали:</b> {html.escape(first.expected_outcome)}",
                     f"<b>Дедлайн ревью:</b> {html.escape(first.due_at.date().isoformat())}",
+                    *self._render_latest_delivery_status(first.id, latest_event),
                     "",
                     f"<b>Завершить:</b> <code>/review_done {first.id} что получилось</code>",
                     f"<b>Пропустить:</b> <code>/review_skip {first.id}</code>",
