@@ -501,6 +501,71 @@ class DecisionServiceTests(unittest.TestCase):
                 self.assertIn("Следующее действие", rendered)
                 self.assertIn("Наблюдай", rendered)
 
+    def test_render_recent_decisions_groups_attention_and_stable_sections(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+        current_time = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+
+        def clock() -> datetime:
+            return current_time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path, clock=clock) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                    clock=clock,
+                )
+
+                first = service.decide("Просроченный attention", user_id=42)
+                current_time = current_time + timedelta(days=10)
+                second = service.decide("Стабильное решение", user_id=42)
+
+                self.assertNotIn("error", first)
+                self.assertNotIn("error", second)
+
+                store.update_record_outcome(
+                    2,
+                    outcome_status=DecisionOutcomeStatus.CONFIRMED,
+                    outcome_summary="Решение подтвердилось",
+                    needs_follow_up=False,
+                )
+
+                current_time = current_time + timedelta(days=5)
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Needs Attention", rendered)
+                self.assertIn("Stable", rendered)
+                self.assertLess(rendered.index("Needs Attention"), rendered.index("Stable"))
+                self.assertLess(rendered.index("Просроченный attention"), rendered.index("Стабильное решение"))
+
+    def test_render_recent_decisions_groups_due_soon_section(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+        current_time = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+
+        def clock() -> datetime:
+            return current_time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path, clock=clock) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                    clock=clock,
+                )
+
+                result = service.decide("Скоро review секция", user_id=42)
+                self.assertNotIn("error", result)
+
+                current_time = current_time + timedelta(days=13)
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Due Soon", rendered)
+                self.assertIn("Скоро review секция", rendered)
+
     def test_render_recent_decisions_shows_empty_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "decision-store.sqlite3"

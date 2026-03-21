@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import itertools
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -135,6 +136,27 @@ class DecisionService:
         }
         return (order.get(status, 5), -record.decision_run_id)
 
+    def _decision_section_key(self, record: Any, review: Any | None) -> int:
+        if record.needs_follow_up:
+            return 0
+        if review is not None and review.status.value in {"scheduled", "due"}:
+            if review.due_at <= self._now():
+                return 0
+            if review.due_at <= self._now() + self.REVIEW_SOON_WINDOW:
+                return 1
+        if record.outcome_status.value in {"invalidated", "mixed"}:
+            return 0
+        return 2
+
+    @staticmethod
+    def _section_label(section_key: int) -> str:
+        labels = {
+            0: "🚨 <b>Needs Attention</b>",
+            1: "⏳ <b>Due Soon</b>",
+            2: "✅ <b>Stable</b>",
+        }
+        return labels.get(section_key, "✅ <b>Stable</b>")
+
     @staticmethod
     def _render_outcome_label(record: Any) -> str:
         status = record.outcome_status.value
@@ -220,9 +242,12 @@ class DecisionService:
             }
             records = sorted(
                 store.list_records(str(user_id)),
-                key=lambda record: self._decision_attention_rank(
-                    record,
-                    reviews_by_record_id.get(record.id),
+                key=lambda record: (
+                    self._decision_section_key(record, reviews_by_record_id.get(record.id)),
+                    *self._decision_attention_rank(
+                        record,
+                        reviews_by_record_id.get(record.id),
+                    ),
                 ),
             )[:limit]
             if not records:
@@ -230,34 +255,44 @@ class DecisionService:
 
             parts = ["🗂️ <b>Последние решения</b>"]
 
-            for record in records:
-                run = store.get_run(record.decision_run_id)
-                self._ensure_owner(run, user_id)
-                review = reviews_by_record_id.get(record.id)
-                review_timing_label = self._render_review_timing_label(review)
-                parts.extend(
-                    [
-                        "",
-                        f"<b>Run:</b> <code>{run.id}</code>",
-                        f"<b>Запрос:</b> {html.escape(run.request_text)}",
-                        f"<b>Вердикт:</b> {html.escape(record.chosen_option)}",
-                        f"<b>Итог:</b> {self._render_outcome_label(record)}",
-                    ]
-                )
-                if review_timing_label:
-                    parts.append(f"<b>Review-сигнал:</b> {review_timing_label}")
-                if review is not None:
-                    parts.append(
-                        f"<b>Review:</b> <code>{review.id}</code> ({html.escape(review.status.value)})"
+            grouped_records = itertools.groupby(
+                records,
+                key=lambda record: self._decision_section_key(
+                    record,
+                    reviews_by_record_id.get(record.id),
+                ),
+            )
+
+            for section_key, section_records in grouped_records:
+                parts.extend(["", self._section_label(section_key)])
+                for record in section_records:
+                    run = store.get_run(record.decision_run_id)
+                    self._ensure_owner(run, user_id)
+                    review = reviews_by_record_id.get(record.id)
+                    review_timing_label = self._render_review_timing_label(review)
+                    parts.extend(
+                        [
+                            "",
+                            f"<b>Run:</b> <code>{run.id}</code>",
+                            f"<b>Запрос:</b> {html.escape(run.request_text)}",
+                            f"<b>Вердикт:</b> {html.escape(record.chosen_option)}",
+                            f"<b>Итог:</b> {self._render_outcome_label(record)}",
+                        ]
                     )
-                    parts.append(
-                        f"<code>/review_trace {review.id}</code> · "
-                        f"<code>/review_done {review.id} что получилось</code>"
-                    )
-                next_action = self._render_next_action(run, record, review)
-                if next_action:
-                    parts.append(next_action)
-                parts.append(f"<code>/decide_trace {run.id}</code>")
+                    if review_timing_label:
+                        parts.append(f"<b>Review-сигнал:</b> {review_timing_label}")
+                    if review is not None:
+                        parts.append(
+                            f"<b>Review:</b> <code>{review.id}</code> ({html.escape(review.status.value)})"
+                        )
+                        parts.append(
+                            f"<code>/review_trace {review.id}</code> · "
+                            f"<code>/review_done {review.id} что получилось</code>"
+                        )
+                    next_action = self._render_next_action(run, record, review)
+                    if next_action:
+                        parts.append(next_action)
+                    parts.append(f"<code>/decide_trace {run.id}</code>")
 
             return "\n".join(parts)
         except DecisionStoreError as exc:
