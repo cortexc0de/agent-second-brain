@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import html
 import itertools
 import logging
@@ -157,6 +158,19 @@ class DecisionService:
         }
         return labels.get(section_key, "✅ <b>Stable</b>")
 
+    def _render_section_summary(self, section_keys: list[int]) -> str:
+        counts = Counter(section_keys)
+        parts: list[str] = []
+        for section_key in (0, 1, 2):
+            count = counts[section_key]
+            if not count:
+                continue
+            label = self._section_label(section_key)
+            plain_label = label.replace("🚨 ", "").replace("⏳ ", "").replace("✅ ", "")
+            plain_label = plain_label.replace("<b>", "").replace("</b>", "")
+            parts.append(f"{plain_label}: {count}")
+        return " · ".join(parts)
+
     @staticmethod
     def _render_outcome_label(record: Any) -> str:
         status = record.outcome_status.value
@@ -254,6 +268,11 @@ class DecisionService:
                 return "🗂️ <b>Пока нет сохранённых решений</b>"
 
             parts = ["🗂️ <b>Последние решения</b>"]
+            section_keys = [
+                self._decision_section_key(record, reviews_by_record_id.get(record.id))
+                for record in records
+            ]
+            parts.extend(["", f"<i>{html.escape(self._render_section_summary(section_keys))}</i>"])
 
             grouped_records = itertools.groupby(
                 records,

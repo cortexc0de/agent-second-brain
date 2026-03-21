@@ -566,6 +566,60 @@ class DecisionServiceTests(unittest.TestCase):
                 self.assertIn("Due Soon", rendered)
                 self.assertIn("Скоро review секция", rendered)
 
+    def test_render_recent_decisions_shows_section_counters_in_header(self) -> None:
+        fake_processor = FakeProcessor(self._decision_payload())
+        current_time = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+
+        def clock() -> datetime:
+            return current_time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "decision-store.sqlite3"
+            with DecisionStore(db_path, clock=clock) as store:
+                service = DecisionService(
+                    vault_path=tmpdir,
+                    processor=fake_processor,
+                    store=store,
+                    clock=clock,
+                )
+
+                attention = service.decide("Attention решение", user_id=42)
+                current_time = current_time + timedelta(days=12)
+                due_soon = service.decide("Due soon решение", user_id=42)
+                current_time = current_time + timedelta(days=5)
+                stable = service.decide("Stable решение", user_id=42)
+
+                self.assertNotIn("error", attention)
+                self.assertNotIn("error", due_soon)
+                self.assertNotIn("error", stable)
+
+                with store._conn:
+                    store._conn.execute(
+                        "UPDATE review_records SET due_at = ? WHERE id = ?",
+                        (store._serialize_datetime(current_time - timedelta(days=1)), 1),
+                    )
+                    store._conn.execute(
+                        "UPDATE review_records SET due_at = ? WHERE id = ?",
+                        (store._serialize_datetime(current_time + timedelta(days=1)), 2),
+                    )
+                    store._conn.execute(
+                        "UPDATE review_records SET due_at = ? WHERE id = ?",
+                        (store._serialize_datetime(current_time + timedelta(days=10)), 3),
+                    )
+
+                store.update_record_outcome(
+                    3,
+                    outcome_status=DecisionOutcomeStatus.CONFIRMED,
+                    outcome_summary="Решение подтвердилось",
+                    needs_follow_up=False,
+                )
+
+                rendered = service.render_recent_decisions(42)
+
+                self.assertIn("Needs Attention: 1", rendered)
+                self.assertIn("Due Soon: 1", rendered)
+                self.assertIn("Stable: 1", rendered)
+
     def test_render_recent_decisions_shows_empty_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "decision-store.sqlite3"
