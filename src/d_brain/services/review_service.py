@@ -7,9 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from d_brain.services.decision_models import ReviewRecord, ReviewStatus
+from d_brain.services.decision_models import DecisionOutcomeStatus, ReviewRecord, ReviewStatus
 from d_brain.services.decision_store import DecisionStore, DecisionStoreError
-from d_brain.services.review_outcome_analyzer import analyze_review_outcome
+from d_brain.services.review_outcome_analyzer import (
+    ReviewOutcomeStatus,
+    analyze_review_outcome,
+)
 
 
 class ReviewServiceError(RuntimeError):
@@ -47,6 +50,14 @@ class ReviewService:
     def _ensure_owner(review: ReviewRecord, user_id: int) -> None:
         if review.workspace_id != str(user_id):
             raise ReviewServiceError("Review does not belong to this user")
+
+    @staticmethod
+    def _map_outcome_status(status: ReviewOutcomeStatus) -> DecisionOutcomeStatus:
+        if status is ReviewOutcomeStatus.CONFIRMED:
+            return DecisionOutcomeStatus.CONFIRMED
+        if status is ReviewOutcomeStatus.INVALIDATED:
+            return DecisionOutcomeStatus.INVALIDATED
+        return DecisionOutcomeStatus.MIXED
 
     def list_due_reviews(self, user_id: int, limit: int = 5) -> list[ReviewRecord]:
         """List due reviews for a user and mark scheduled ones as due."""
@@ -121,28 +132,28 @@ class ReviewService:
             review = store.get_review(review_id)
             self._ensure_owner(review, user_id)
             record = store.get_record(review.decision_record_id)
-            assessment = analyze_review_outcome(outcome.strip())
+            assessment = analyze_review_outcome(review.expected_outcome, outcome.strip())
             updated = store.update_review(
                 review_id,
                 ReviewStatus.COMPLETED,
-                user_response=assessment.summary,
-                actual_outcome=assessment.summary,
-                agent_assessment=assessment.agent_assessment,
+                user_response=outcome.strip(),
+                actual_outcome=outcome.strip(),
+                agent_assessment=assessment.assessment,
             )
             store.update_record_outcome(
                 record.id,
-                outcome_status=assessment.status,
-                outcome_summary=assessment.summary,
-                needs_follow_up=assessment.follow_up_required,
+                outcome_status=self._map_outcome_status(assessment.status),
+                outcome_summary=outcome.strip(),
+                needs_follow_up=assessment.needs_follow_up,
             )
-            follow_up_line = "Да" if assessment.follow_up_required else "Нет"
+            follow_up_line = "Да" if assessment.needs_follow_up else "Нет"
             return (
                 "✅ <b>Review закрыт</b>\n\n"
                 f"<b>ID:</b> <code>{updated.id}</code>\n"
                 f"<b>Решение:</b> {html.escape(record.title)}\n"
                 f"<b>Статус:</b> {html.escape(assessment.status.value)}\n"
                 f"<b>Нужен follow-up:</b> {follow_up_line}\n"
-                f"<b>Итог:</b> {html.escape(assessment.summary)}"
+                f"<b>Итог:</b> {html.escape(outcome.strip())}"
             )
         except DecisionStoreError as exc:
             raise ReviewServiceError(str(exc)) from exc

@@ -101,6 +101,7 @@ def analyze_review_outcome(expected_outcome: str, actual_outcome: str) -> Review
     """Analyze completed review text against expected outcome signals."""
     signals = _split_signals(expected_outcome)
     outcome_text = (actual_outcome or "").strip()
+    overall_polarity = _classify_clause(outcome_text)
 
     if not outcome_text:
         return _build_analysis(
@@ -123,9 +124,11 @@ def analyze_review_outcome(expected_outcome: str, actual_outcome: str) -> Review
             matched_signals.append(signal)
         elif best_clause and clause_polarity == "negative":
             missed_signals.append(signal)
+        elif overall_polarity == "positive":
+            matched_signals.append(signal)
         elif _is_vague(outcome_text):
             missed_signals.append(signal)
-        elif _classify_clause(outcome_text) == "negative":
+        elif overall_polarity == "negative":
             missed_signals.append(signal)
         else:
             missed_signals.append(signal)
@@ -206,11 +209,29 @@ def _select_best_clause(signal_tokens: set[str], clauses: list[str]) -> str:
     best_score = 0
     for clause in clauses:
         clause_tokens = _meaningful_tokens(clause)
-        score = len(signal_tokens & clause_tokens)
+        score = _token_overlap_score(signal_tokens, clause_tokens)
         if score > best_score:
             best_score = score
             best_clause = clause
     return best_clause
+
+
+def _token_overlap_score(left: set[str], right: set[str]) -> int:
+    score = 0
+    used_right: set[str] = set()
+    for left_token in left:
+        for right_token in right:
+            if right_token in used_right:
+                continue
+            if _tokens_match(left_token, right_token):
+                score += 1
+                used_right.add(right_token)
+                break
+    return score
+
+
+def _tokens_match(left: str, right: str) -> bool:
+    return left == right or left.startswith(right) or right.startswith(left)
 
 
 def _classify_clause(text: str) -> str:
