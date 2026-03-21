@@ -108,15 +108,26 @@ async def cmd_decide_trace(message: Message, command: CommandObject) -> None:
 
 
 @router.message(Command("decisions"))
-async def cmd_decisions(message: Message) -> None:
+async def cmd_decisions(message: Message, command: CommandObject | None = None) -> None:
     """Show recent persisted decisions for the current user."""
     user_id = await _require_user_id(message)
     if user_id is None:
         return
 
+    limit = 5
+    if command is not None and command.args and command.args.strip():
+        if not command.args.strip().isdigit():
+            await message.answer(
+                "🗂️ <b>Формат:</b> <code>/decisions [limit]</code>\n\n"
+                "Пример:\n"
+                "<code>/decisions 10</code>"
+            )
+            return
+        limit = int(command.args.strip())
+
     service = _build_decision_service()
     try:
-        result = service.render_recent_decisions(user_id)
+        result = service.render_recent_decisions(user_id, limit=limit)
     except (DecisionServiceError, RuntimeError) as exc:
         await message.answer(f"❌ <b>Ошибка:</b> {exc}")
         return

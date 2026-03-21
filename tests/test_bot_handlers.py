@@ -304,8 +304,36 @@ class DecideHandlerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(decide, "_build_decision_service", return_value=service):
             await decide.cmd_decisions(message)
 
-        service.render_recent_decisions.assert_called_once_with(42)
+        service.render_recent_decisions.assert_called_once_with(42, limit=5)
         message.answer.assert_awaited_once_with("recent")
+
+    async def test_cmd_decisions_accepts_numeric_limit_argument(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="10")
+        service = MagicMock()
+        service.render_recent_decisions.return_value = "recent-10"
+
+        with patch.object(decide, "_build_decision_service", return_value=service):
+            await decide.cmd_decisions(message, command)
+
+        service.render_recent_decisions.assert_called_once_with(42, limit=10)
+        message.answer.assert_awaited_once_with("recent-10")
+
+    async def test_cmd_decisions_rejects_non_numeric_limit_argument(self) -> None:
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=42),
+            answer=AsyncMock(),
+        )
+        command = SimpleNamespace(args="ten")
+
+        await decide.cmd_decisions(message, command)
+
+        message.answer.assert_awaited_once()
+        reply_text = message.answer.await_args.args[0]
+        self.assertIn("/decisions [limit]", reply_text)
 
     async def test_cmd_decisions_handles_service_error(self) -> None:
         message = SimpleNamespace(

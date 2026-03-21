@@ -63,6 +63,7 @@ async def cmd_help(message: Message) -> None:
         "/weekly - недельный дайджест\n\n"
         "<i>Пример: /decide у меня 3 направления, не понимаю, что оставить на 2 недели</i>\n"
         "<i>Пример: /decisions</i>\n"
+        "<i>Пример: /decisions 10</i>\n"
         "<i>Пример: /decide_trace 7</i>\n"
         "<i>Пример: /review_done 3 активации выросли, фокус подтвердился</i>\n"
         "<i>Пример: /review_trace 3</i>\n"
