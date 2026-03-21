@@ -20,7 +20,7 @@ async def cmd_decide(message: Message, command: CommandObject) -> None:
     """Handle /decide command for structured decision support."""
     user_id = message.from_user.id if message.from_user else 0
 
-    if not command.args:
+    if not command.args or not command.args.strip():
         await message.answer(
             "🎯 <b>Формат:</b> <code>/decide твой вопрос</code>\n\n"
             "Пример:\n"
@@ -56,7 +56,11 @@ async def cmd_decide(message: Message, command: CommandObject) -> None:
 
         return await task
 
-    report = await run_with_progress()
+    try:
+        report = await run_with_progress()
+    except Exception as exc:
+        logger.exception("Decision flow failed")
+        report = {"error": str(exc)}
     formatted = format_process_report(report)
 
     try:

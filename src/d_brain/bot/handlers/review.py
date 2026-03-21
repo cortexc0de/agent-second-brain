@@ -23,7 +23,13 @@ async def cmd_review(message: Message) -> None:
     """Show due reviews for the current user."""
     user_id = message.from_user.id if message.from_user else 0
     service = _build_review_service()
-    await message.answer(service.render_review_overview(user_id))
+    try:
+        result = service.render_review_overview(user_id)
+    except ReviewServiceError as exc:
+        await message.answer(f"❌ <b>Ошибка:</b> {exc}")
+        return
+
+    await message.answer(result)
 
 
 @router.message(Command("review_done"))
